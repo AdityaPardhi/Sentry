@@ -18,3 +18,5 @@ __pycache__/
 # Sandbox runtime mounts
 .old_root/
 /opt/sentry/sandbox-root/
+
+changes.md
