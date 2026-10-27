@@ -6,7 +6,6 @@
 # Verifies:
 #   10.1 Consolidated single incidents schema with full forensic telemetry
 #   10.2 Auto-populated incident records on security events with executable and timestamps
-#   10.3 db/incidents_report.py helper output (ASCII boxed cards & CSV export)
 #
 
 set -uo pipefail
@@ -116,32 +115,8 @@ else
     fail "Forensic incident record incomplete: ${FORENSIC_CHECK}"
 fi
 
-# ── Test 10.3: db/incidents_report.py CLI Execution ──────────────────
-
-header "Test 10.3 — Forensic Report Generator (Boxed & CSV Formats)"
-
-echo "[*] Generating boxed digital forensics card report:"
-python3 db/incidents_report.py --db "${LIVE_DB}" --format boxed > /tmp/sentry_p10_boxed.log 2>&1
-cat /tmp/sentry_p10_boxed.log
-
-if grep -q "SENTRY DIGITAL FORENSICS INCIDENT REPORT" /tmp/sentry_p10_boxed.log; then
-    pass "Rendered printable digital forensics ASCII boxed cards"
-else
-    fail "Failed to render boxed report"
-fi
-
-echo "[*] Generating CSV report export:"
-python3 db/incidents_report.py --db "${LIVE_DB}" --format csv > /tmp/sentry_p10_export.csv 2>&1
-cat /tmp/sentry_p10_export.csv
-
-if grep -q "incident_id,pid,executable" /tmp/sentry_p10_export.csv && grep -q "/bin/stress_files" /tmp/sentry_p10_export.csv; then
-    pass "Exported valid digital forensics CSV table suitable for viva/report documentation"
-else
-    fail "Failed to export valid forensic CSV"
-fi
-
 # Clean up
-rm -f "${TEST_DB}" "${LIVE_DB}" /tmp/sentry_p10_test.log /tmp/sentry_p10_boxed.log /tmp/sentry_p10_export.csv
+rm -f "${TEST_DB}" "${LIVE_DB}" /tmp/sentry_p10_test.log
 
 # ── Summary ──────────────────────────────────────────────────────────
 

@@ -88,9 +88,11 @@ class NetworkMonitor:
 
         # Track previously observed socket inodes to detect newly opened sockets
         self.seen_sockets: Set[str] = set()
+        self.prev_sockets: Optional[Set[str]] = None
+        self.prev_sample_time: Optional[float] = None
+        self.is_first_sample: bool = True
+        self.current_rate: float = 0.0
 
-        # Rolling window of new socket timestamps for rate (Step 6.2)
-        self.attempt_timestamps: Deque[float] = deque()
         self.start_time = time.time()
         self.total_attempts = 0
 
@@ -99,11 +101,13 @@ class NetworkMonitor:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
-    def _get_unix_proc_path(self) -> str:
-        """Returns the /proc path for AF_UNIX sockets in the sandbox's namespace."""
-        if self.pid and os.path.exists(f"/proc/{self.pid}/net/unix"):
-            return f"/proc/{self.pid}/net/unix"
-        return "/proc/net/unix"
+    def _get_unix_proc_path(self) -> Optional[str]:
+        """Returns the /proc path for AF_UNIX sockets in the sandbox's namespace, or None."""
+        if self.pid and os.path.exists(f"/proc/{self.pid}"):
+            proc_path = f"/proc/{self.pid}/net/unix"
+            if os.path.exists(proc_path):
+                return proc_path
+        return None
 
     def parse_unix_sockets(self) -> List[SocketInfo]:
         """
@@ -118,7 +122,7 @@ class NetworkMonitor:
         path = self._get_unix_proc_path()
         sockets: List[SocketInfo] = []
 
-        if not os.path.exists(path):
+        if not path or not os.path.exists(path):
             return sockets
 
         try:
@@ -166,59 +170,59 @@ class NetworkMonitor:
         return self.parse_unix_sockets()
 
     def get_rate(self) -> float:
-        """
-        Computes rolling connection-attempts-per-minute over 60 seconds (Step 6.2).
-        """
-        now = time.time()
-        cutoff = now - 60.0
-
-        with self._lock:
-            while self.attempt_timestamps and self.attempt_timestamps[0] < cutoff:
-                self.attempt_timestamps.popleft()
-
-            count = len(self.attempt_timestamps)
-            elapsed = now - self.start_time
-
-        if elapsed < 60.0 and elapsed > 0.5:
-            return (count / elapsed) * 60.0
-        return float(count)
+        """Returns the current connection rate."""
+        return self.current_rate
 
     def sample(self) -> NetworkSample:
         """
         Takes one AF_UNIX network monitoring sample:
-          - Counts active Unix-domain sockets inside the sandbox's net namespace.
-          - Records socket paths and computes new-socket rate (per minute).
-          - Logs to network_samples table in SQLite.
+          - Reads /proc/<pid>/net/unix only while /proc/<pid> exists; returns 0 otherwise.
+          - Rate = NEW sockets since previous sample / real elapsed seconds (min 1.0s).
+          - Skips the first sample (rate = 0.0).
+          - Logs sample to SQLite only while process exists.
         """
         now = time.time()
+
+        # Read /proc/<pid>/net/unix only while /proc/<pid> exists; return 0 otherwise and never fall back
+        if not self.pid or not os.path.exists(f"/proc/{self.pid}"):
+            return NetworkSample(
+                pid=self.pid,
+                timestamp=now,
+                active_connections=0,
+                connection_rate=0.0,
+                syn_sent_count=0,
+                destinations=[],
+            )
+
         sockets = self.get_all_sockets()
 
         active_count = 0
         current_paths: Set[str] = set()
-        new_sockets_found = 0
+        current_inodes: Set[str] = set()
 
         for s in sockets:
-            is_active = s.state_code in UNIX_ACTIVE_STATES
-            if is_active:
+            if s.state_code in UNIX_ACTIVE_STATES:
                 active_count += 1
-
-            # Use inode as the unique signature for a socket
-            sig = f"inode:{s.inode}"
-            if sig not in self.seen_sockets:
-                self.seen_sockets.add(sig)
-                new_sockets_found += 1
-
+            current_inodes.add(s.inode)
             if s.path and s.path != "(anonymous)":
                 current_paths.add(s.path)
 
-        # Register new sockets in the sliding window
-        with self._lock:
-            for _ in range(new_sockets_found):
-                self.attempt_timestamps.append(now)
-            self.total_attempts += new_sockets_found
-
-        rate = self.get_rate()
         path_list = sorted(list(current_paths))
+
+        with self._lock:
+            if self.is_first_sample:
+                self.is_first_sample = False
+                self.prev_sockets = set(current_inodes)
+                self.prev_sample_time = now
+                rate = 0.0
+            else:
+                new_sockets = len(current_inodes - (self.prev_sockets or set()))
+                elapsed = now - (self.prev_sample_time or now)
+                elapsed_sec = max(elapsed, 1.0)
+                rate = new_sockets / elapsed_sec
+                self.prev_sockets = set(current_inodes)
+                self.prev_sample_time = now
+            self.current_rate = rate
 
         # Log sample to SQLite
         if self.db is not None:
@@ -227,7 +231,7 @@ class NetworkMonitor:
                     timestamp=now,
                     active_connections=active_count,
                     connection_rate=rate,
-                    syn_sent_count=0,   # N/A for AF_UNIX
+                    syn_sent_count=0,
                     destinations=json.dumps(path_list),
                     pid=self.pid
                 )

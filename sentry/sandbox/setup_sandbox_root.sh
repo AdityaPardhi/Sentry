@@ -38,6 +38,17 @@ if command -v debootstrap &>/dev/null; then
     debootstrap --variant=minbase "${CODENAME}" "${SANDBOX_ROOT}" \
         http://archive.ubuntu.com/ubuntu/
 
+    # Pre-create mount points that must exist in the read-only root at runtime
+    mkdir -p "${SANDBOX_ROOT}/.old_root" && chmod 0700 "${SANDBOX_ROOT}/.old_root"
+    mkdir -p "${SANDBOX_ROOT}/proc"
+    mkdir -p "${SANDBOX_ROOT}/dev"
+    rm -rf "${SANDBOX_ROOT}/dev"/*
+    mknod -m 666 "${SANDBOX_ROOT}/dev/null"    c 1 3 2>/dev/null || true
+    mknod -m 666 "${SANDBOX_ROOT}/dev/zero"    c 1 5 2>/dev/null || true
+    mknod -m 666 "${SANDBOX_ROOT}/dev/urandom" c 1 9 2>/dev/null || true
+    mkdir -p "${SANDBOX_ROOT}/tmp"
+    mkdir -p "${SANDBOX_ROOT}/opt/sample"
+
     echo ""
     echo "[✓] debootstrap complete."
 else
@@ -50,9 +61,11 @@ else
     echo "[*] Copying essential directories..."
 
     # Create the directory structure
-    for dir in bin sbin lib lib64 usr/bin usr/sbin usr/lib etc proc dev tmp; do
+    for dir in bin sbin lib lib64 usr/bin usr/sbin usr/lib etc proc dev tmp opt/sample; do
         mkdir -p "${SANDBOX_ROOT}/${dir}"
     done
+    # Pre-create mount points needed at runtime (root is read-only then)
+    mkdir -p "${SANDBOX_ROOT}/.old_root" && chmod 0700 "${SANDBOX_ROOT}/.old_root"
 
     # List of essential utilities to copy
     CORE_BINS=(
@@ -110,9 +123,10 @@ else
     echo "root:x:0:" > "${SANDBOX_ROOT}/etc/group"
     echo "sandbox" > "${SANDBOX_ROOT}/etc/hostname"
 
-    # Create /dev/null and /dev/zero (mknod requires root)
-    mknod -m 666 "${SANDBOX_ROOT}/dev/null"  c 1 3 2>/dev/null || true
-    mknod -m 666 "${SANDBOX_ROOT}/dev/zero"  c 1 5 2>/dev/null || true
+    # Create /dev/null, /dev/zero, /dev/urandom (mknod requires root) and nothing else in /dev
+    rm -rf "${SANDBOX_ROOT}/dev"/*
+    mknod -m 666 "${SANDBOX_ROOT}/dev/null"    c 1 3 2>/dev/null || true
+    mknod -m 666 "${SANDBOX_ROOT}/dev/zero"    c 1 5 2>/dev/null || true
     mknod -m 666 "${SANDBOX_ROOT}/dev/urandom" c 1 9 2>/dev/null || true
 
     echo ""

@@ -327,9 +327,11 @@ def cmd_run(args: argparse.Namespace, remaining_cmd: List[str]) -> None:
         cmd_line_ctrl,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
         text=True,
         bufsize=1,
         pass_fds=(ctrl_wr,),
+        start_new_session=True,
     )
     # Parent closes its copy of the write end — child has the only reference
     os.close(ctrl_wr)
@@ -395,16 +397,6 @@ def cmd_run(args: argparse.Namespace, remaining_cmd: List[str]) -> None:
             sys.stdout.flush()
 
             if not p_sample.is_alive:
-                if file_mon:
-                    file_mon.sample()
-                net_mon.sample()
-                risk_engine.evaluate(
-                    proc_sample=p_sample,
-                    file_rate=f_rate,
-                    conn_rate=n_sample.connection_rate,
-                    active_conns=n_sample.active_connections,
-                    seccomp_killed=False
-                )
                 break
 
     # Part 1.5 — seccomp kill now detected only from exit status (SIGSYS == signal 31),
@@ -472,13 +464,6 @@ def cmd_run(args: argparse.Namespace, remaining_cmd: List[str]) -> None:
                     os.kill(child_pid, getattr(signal, "SIGKILL", 9))
                 except Exception:
                     pass
-                # Clean up cgroup on timeout termination
-                cgroup_p = f"/sys/fs/cgroup/sentry_{child_pid}"
-                if os.path.exists(cgroup_p):
-                    try:
-                        os.rmdir(cgroup_p)
-                    except Exception:
-                        pass
             try:
                 proc.terminate()
             except Exception:
@@ -577,51 +562,79 @@ def cmd_run(args: argparse.Namespace, remaining_cmd: List[str]) -> None:
             seccomp_killed = True
     except KeyboardInterrupt:
         print("\n[sentry] Interrupted by user. Terminating sandbox...")
-        proc.terminate()
+        stop_event.set()
+        if monitor_thread and monitor_thread.is_alive():
+            monitor_thread.join(timeout=2.0)
         try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+            proc.terminate()
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=1.0)
+        except Exception:
+            pass
     finally:
         stop_event.set()
         if monitor_thread and monitor_thread.is_alive():
             monitor_thread.join(timeout=2.0)
-        final_f_rate = 0.0
         if file_mon:
-            try:
-                final_f_rate, _ = file_mon.sample()
-            except Exception:
-                pass
             file_mon.stop()
-        final_n_rate = 0.0
-        final_n_active = 0
         if net_mon:
-            try:
-                ns = net_mon.sample()
-                final_n_rate = ns.connection_rate
-                final_n_active = ns.active_connections
-            except Exception:
-                pass
             net_mon.stop()
-        if risk_engine and child_pid:
+        if risk_engine and child_pid and seccomp_killed:
             try:
                 final_assessment = risk_engine.evaluate(
                     proc_sample=None,
-                    file_rate=final_f_rate,
-                    conn_rate=final_n_rate,
-                    active_conns=final_n_active,
-                    seccomp_killed=seccomp_killed
+                    file_rate=0.0,
+                    conn_rate=0.0,
+                    active_conns=0,
+                    seccomp_killed=True
                 )
                 if response_engine:
                     response_engine.act(
                         final_assessment,
                         target_pid=child_pid,
                         executable=remaining_cmd[0] if remaining_cmd else "unknown",
-                        file_write_rate=final_f_rate,
-                        connection_attempts=final_n_active
+                        file_write_rate=0.0,
+                        connection_attempts=0
                     )
             except Exception:
                 pass
+
+        # Cgroup cleanup after sandbox process ends by ANY path
+        if child_pid:
+            cgroup_path = f"/sys/fs/cgroup/sentry_{child_pid}"
+            kill_file = os.path.join(cgroup_path, "cgroup.kill")
+            if os.path.exists(kill_file):
+                try:
+                    with open(kill_file, "w") as f:
+                        f.write("1")
+                except OSError:
+                    pass
+
+            procs_file = os.path.join(cgroup_path, "cgroup.procs")
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                if not os.path.exists(procs_file):
+                    break
+                try:
+                    with open(procs_file, "r") as f:
+                        content = f.read().strip()
+                    if not content:
+                        break
+                except (FileNotFoundError, ProcessLookupError):
+                    break
+                except OSError:
+                    pass
+                time.sleep(0.1)
+
+            try:
+                os.rmdir(cgroup_path)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                print(f"[sentry] Warning: failed to remove cgroup {cgroup_path}: {e}", file=sys.stderr)
 
     # Print any command output
     if cmd_output_lines:
@@ -665,7 +678,7 @@ def cmd_run(args: argparse.Namespace, remaining_cmd: List[str]) -> None:
             peak_cpu = max(s["cpu_percent"] for s in samples)
             peak_rss = max(s["rss_kb"] for s in samples) / 1024.0
             peak_f_rate = max((fs["file_write_rate"] for fs in file_samples), default=0.0)
-            peak_n_rate = max((ns["connection_rate"] for ns in net_samples), default=0.0)
+            peak_n_rate = max((ns["connection_rate"] for ns in net_samples[1:]), default=0.0) if len(net_samples) > 1 else 0.0
             peak_risk = max((rs["score"] for rs in risk_scores), default=0)
             max_band = max(risk_scores, key=lambda rs: rs["score"])["band"] if risk_scores else "NORMAL"
             print(f"[sentry telemetry] Recorded {len(samples)} samples for PID {child_pid}:")

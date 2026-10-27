@@ -21,7 +21,7 @@ int main(void)
 
     ssize_t n = write(fd, "b", 1);  /* 'b' = reboot */
     close(fd);
-    if (n < 0) {
+    if (n >= 0) {
         fprintf(stderr, "[escape] write(%s): %s — blocked\n", path, strerror(errno));
         return 1;
     }

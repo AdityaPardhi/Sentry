@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SENTRY — Is this file safe?</title>
+  <style>
+    /* Reset & CSS variables */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0b0f19; --card-bg: #111827; --card-border: #1f2937;
+      --text: #f3f4f6; --text-muted: #9ca3af; --accent: #38bdf8;
+      --safe: #10b981; --warn: #f59e0b; --danger: #ef4444;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    body { background: var(--bg); color: var(--text); font-family: var(--font-sans); line-height: 1.5; padding: 24px 16px; min-height: 100vh; }
+    .container { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
+
+    /* Header & Badge */
+    header { text-align: center; }
+    .badge { display: inline-block; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 4px 10px; border-radius: 9999px; }
+    .badge-sim { background: #1e293b; color: #fbbf24; border: 1px solid #4b5563; margin-bottom: 8px; }
+    h1 { font-size: 2rem; font-weight: 800; color: #fff; margin: 4px 0 8px; }
+    .tagline { color: var(--text-muted); font-size: 1.05rem; max-width: 650px; margin: 0 auto; }
+
+    /* Pipeline 4-Cards */
+    .pipeline { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .pipe-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px 10px; flex: 1; min-width: 0; text-align: center; }
+    .pipe-step { font-size: 0.7rem; color: var(--accent); font-weight: 700; text-transform: uppercase; }
+    .pipe-title { font-size: 0.95rem; font-weight: 700; color: #fff; margin: 2px 0 4px; }
+    .pipe-desc { font-size: 0.75rem; color: var(--text-muted); line-height: 1.35; }
+    .pipe-arrow { color: #4b5563; font-weight: bold; font-size: 1.2rem; flex-shrink: 0; }
+
+    /* Panels & Scanner */
+    .panel { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px; padding: 22px; }
+    .section-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 14px; color: #fff; }
+    .dropzone { border: 2px dashed #374151; border-radius: 10px; padding: 24px 16px; text-align: center; cursor: pointer; transition: 0.2s; background: #0f172a; }
+    .dropzone.dragover { border-color: var(--accent); background: #1e293b; }
+    .drop-btn { margin-top: 10px; background: #1f2937; color: #fff; border: 1px solid #374151; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+    .file-details { margin-top: 14px; padding: 12px; background: #0f172a; border-radius: 8px; font-size: 0.82rem; display: flex; flex-direction: column; gap: 4px; }
+    .file-details span, .file-details code { word-break: break-all; }
+    .quick-demos { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .quick-demos span { font-size: 0.8rem; color: var(--text-muted); }
+    .btn-demo { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; }
+    .btn-demo:hover { background: #334155; color: #fff; }
+    .btn-scan { margin-top: 16px; width: 100%; background: #0284c7; color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: 700; font-size: 0.95rem; cursor: pointer; }
+    .btn-scan:hover { background: #0369a1; }
+
+    /* Stepper Animation */
+    .stepper { display: flex; justify-content: space-between; margin-top: 18px; }
+    .step-item { flex: 1; text-align: center; }
+    .step-dot { width: 22px; height: 22px; border-radius: 50%; background: #1f2937; border: 2px solid #374151; margin: 0 auto 6px; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; }
+    .step-item.active .step-dot { border-color: var(--accent); background: #0369a1; color: #fff; }
+    .step-item.done .step-dot { border-color: var(--safe); background: var(--safe); color: #fff; }
+    .step-label { font-size: 0.75rem; color: var(--text-muted); }
+
+    /* Result Card */
+    .result-card { display: flex; flex-direction: column; gap: 16px; }
+    .verdict-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+    .verdict-badge { font-size: 1.1rem; font-weight: 800; padding: 8px 16px; border-radius: 8px; text-transform: uppercase; }
+    .v-safe { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid var(--safe); }
+    .v-sus { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid var(--warn); }
+    .v-mal { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid var(--danger); }
+
+    /* Score Bar & Tables */
+    .score-box { background: #0f172a; border-radius: 8px; padding: 12px; }
+    .score-meta { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 6px; }
+    .bar-track { height: 14px; background: #1f2937; border-radius: 9999px; overflow: hidden; display: flex; }
+    .bar-static { background: #818cf8; height: 100%; transition: width 0.5s; }
+    .bar-dynamic { background: #f43f5e; height: 100%; transition: width 0.5s; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid var(--card-border); }
+    th { color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 0.72rem; }
+    .tag-src { font-family: var(--font-mono); font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; font-weight: 600; }
+    .tag-static { background: #312e81; color: #a5b4fc; }
+    .tag-dynamic { background: #701a75; color: #f472b6; }
+    .pass-pill { color: var(--safe); font-weight: bold; }
+
+    /* Chart & Notes */
+    .chart-box { background: #0f172a; border-radius: 8px; padding: 12px; }
+    .chart-legend { display: flex; gap: 16px; font-size: 0.75rem; margin-bottom: 8px; color: var(--text-muted); }
+    .leg-item { display: flex; align-items: center; gap: 5px; }
+    .leg-color { width: 10px; height: 10px; border-radius: 2px; }
+    .safety-note { font-size: 0.8rem; color: #cbd5e1; background: #1e293b; padding: 10px; border-radius: 6px; border-left: 3px solid #64748b; }
+    footer { text-align: center; color: var(--text-muted); font-size: 0.85rem; padding: 16px 0; }
+
+    @media (max-width: 640px) {
+      .pipeline { flex-direction: column; }
+      .pipe-arrow { transform: rotate(90deg); margin: 2px 0; }
+      .pipe-card { width: 100%; }
+      .verdict-header { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- 1. Header -->
+    <header>
+      <div class="badge badge-sim">SIMULATED RESULT — demo data, not a real scan.</div>
+      <h1>SENTRY — Is this file safe?</h1>
+      <p class="tagline">A Linux sandbox that runs untrusted files in isolation and watches what they do.</p>
+    </header>
+
+    <!-- 2. How it works -->
+    <section class="pipeline">
+      <div class="pipe-card">
+        <div class="pipe-step">Step 1</div>
+        <div class="pipe-title">Isolate</div>
+        <div class="pipe-desc">namespaces, pivot_root, read-only root</div>
+      </div>
+      <div class="pipe-arrow">&rarr;</div>
+      <div class="pipe-card">
+        <div class="pipe-step">Step 2</div>
+        <div class="pipe-title">Restrict</div>
+        <div class="pipe-desc">seccomp syscall filter, cgroup CPU/RAM/process limits</div>
+      </div>
+      <div class="pipe-arrow">&rarr;</div>
+      <div class="pipe-card">
+        <div class="pipe-step">Step 3</div>
+        <div class="pipe-title">Monitor</div>
+        <div class="pipe-desc">CPU, memory, processes, file writes, sockets</div>
+      </div>
+      <div class="pipe-arrow">&rarr;</div>
+      <div class="pipe-card">
+        <div class="pipe-step">Step 4</div>
+        <div class="pipe-title">Decide</div>
+        <div class="pipe-desc">risk score 0-100, throttle or kill</div>
+      </div>
+    </section>
+
+    <!-- 3. Scan a file -->
+    <section class="panel">
+      <div class="section-title">Scan a File in Sandbox</div>
+      <div class="dropzone" id="dropzone">
+        <div style="font-size:1.6rem;">📁</div>
+        <div style="color:#e2e8f0; font-weight:600; margin:6px 0;">Drag and drop untrusted file here</div>
+        <div style="font-size:0.8rem; color:var(--text-muted);">or select from your disk</div>
+        <button type="button" class="drop-btn" id="browseBtn">Choose file</button>
+        <input type="file" id="fileInput" style="display:none">
+      </div>
+
+      <div class="file-details" id="fileDetails" style="display:none;">
+        <div><strong>Name:</strong> <span id="fileName"></span></div>
+        <div><strong>Size:</strong> <span id="fileSize"></span></div>
+        <div><strong>SHA-256:</strong> <code id="fileHash">Computing...</code></div>
+      </div>
+
+      <div class="quick-demos">
+        <span>Quick demo scenarios:</span>
+        <button type="button" class="btn-demo" id="demoHarmless">Harmless script</button>
+        <button type="button" class="btn-demo" id="demoDropper">Fake dropper</button>
+        <button type="button" class="btn-demo" id="demoNoisy">Noisy script</button>
+      </div>
+
+      <button type="button" class="btn-scan" id="scanBtn">Scan Selected File</button>
+
+      <div class="stepper" id="stepper" style="display:none;">
+        <div class="step-item" id="stage1"><div class="step-dot">1</div><div class="step-label">Static checks</div></div>
+        <div class="step-item" id="stage2"><div class="step-dot">2</div><div class="step-label">Starting sandbox</div></div>
+        <div class="step-item" id="stage3"><div class="step-dot">3</div><div class="step-label">Monitoring</div></div>
+        <div class="step-item" id="stage4"><div class="step-dot">4</div><div class="step-label">Verdict</div></div>
+      </div>
+    </section>
+
+    <!-- 4. Result card -->
+    <section class="panel result-card" id="resultCard" style="display:none;">
+      <div class="verdict-header">
+        <div>
+          <span class="badge badge-sim">SIMULATED RESULT — demo data, not a real scan.</span>
+          <h2 style="font-size: 1.1rem; margin-top: 4px;">Target: <span id="resFileName"></span></h2>
+        </div>
+        <div class="verdict-badge" id="verdictBadge"></div>
+      </div>
+
+      <div class="score-box">
+        <div class="score-meta">
+          <span>Overall Risk Score: <strong id="scoreTotal">0</strong> / 100</span>
+          <span style="font-size:0.75rem; color:var(--text-muted);">(Static: <span id="scoreStatic">0</span> | Dynamic: <span id="scoreDynamic">0</span>)</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-static" id="barStatic" style="width:0%"></div>
+          <div class="bar-dynamic" id="barDynamic" style="width:0%"></div>
+        </div>
+      </div>
+
+      <div>
+        <div style="font-weight:700; font-size:0.9rem; margin-bottom:8px;">Identified Behavioral Findings</div>
+        <table>
+          <thead><tr><th>Source</th><th>Rule</th><th>Points</th><th>Reason</th></tr></thead>
+          <tbody id="findingsBody"></tbody>
+        </table>
+      </div>
+
+      <div class="chart-box">
+        <div class="chart-legend">
+          <div class="leg-item"><div class="leg-color" style="background:#38bdf8;"></div> CPU Usage %</div>
+          <div class="leg-item"><div class="leg-color" style="background:#f59e0b;"></div> Active Processes</div>
+        </div>
+        <div id="svgChartWrapper"></div>
+      </div>
+
+      <div class="safety-note">
+        No issues observed means nothing bad was seen in a short run. It is not a guarantee of safety.
+      </div>
+    </section>
+
+    <!-- 5. Proof the sandbox works -->
+    <section class="panel">
+      <div class="section-title">Proof the Sandbox Works</div>
+      <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:12px;">Empirical escape resistance tests verifying kernel primitives (namespaces, seccomp, pivot_root).</p>
+      <table>
+        <thead><tr><th>Escape Test Vector</th><th>Targeted Attack</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>read host file via path traversal</td><td>Break container boundary to read /etc/passwd</td><td><span class="pass-pill">PASS</span></td></tr>
+          <tr><td>write /proc/sysrq-trigger</td><td>Host kernel panic injection via masked procfs</td><td><span class="pass-pill">PASS</span></td></tr>
+          <tr><td>mknod device</td><td>Create host block device node in container</td><td><span class="pass-pill">PASS</span></td></tr>
+          <tr><td>chroot escape</td><td>Classic fchdir() chroot breakout attempt</td><td><span class="pass-pill">PASS</span></td></tr>
+          <tr><td>fork bomb</td><td>Recursive fork PID table exhaustion</td><td><span class="pass-pill">PASS</span></td></tr>
+          <tr><td>raw socket</td><td>Privileged network raw socket instantiation</td><td><span class="pass-pill">PASS</span></td></tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top:22px;">
+        <div style="font-weight:700; font-size:0.9rem; margin-bottom:4px; color:#fff;">Results from real test runs.</div>
+        <p style="font-size:0.75rem; color:var(--text-muted); margin-bottom:10px;">Empirical metrics from comparison_report.md comparing host vs Sentry sandbox.</p>
+        <table>
+          <thead><tr><th>Attack Vector</th><th>Evaluation Metric</th><th>Without Sentry</th><th>With Sentry</th><th>Improvement</th></tr></thead>
+          <tbody>
+            <tr><td>CPU Stress Burn</td><td>Peak CPU %</td><td>99.7 %</td><td>49.4 %</td><td class="pass-pill">+50.4%</td></tr>
+            <tr><td>Process Storm</td><td>Active Processes</td><td>50.0 procs</td><td>30.0 procs</td><td class="pass-pill">+40.0%</td></tr>
+            <tr><td>Seccomp Syscall Escape</td><td>Syscall Allowed</td><td>1.0 (allowed)</td><td>0.0 (blocked)</td><td class="pass-pill">+100.0%</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 6. Footer -->
+    <footer>Team project. Linux namespaces, seccomp, cgroups v2.</footer>
+  </div>
+
+  <script>
+    /* Built-in sample objects */
+    const SAMPLES = {
+      harmless: {
+        name: "harmless_script.sh", size: "384 B",
+        sha256: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+        verdict: "NO ISSUES OBSERVED", vClass: "v-safe",
+        score: 3, staticScore: 0, dynamicScore: 3, findings: [],
+        cpu: [1.2, 1.4, 2.0, 2.5, 2.1, 1.8, 1.5, 2.2, 2.6, 2.0, 1.6, 1.3, 1.8, 2.1, 1.9, 1.4, 1.2, 1.0, 0.9, 0.8],
+        procs: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+      },
+      dropper: {
+        name: "fake_dropper.bin", size: "14.2 KB",
+        sha256: "7d1a54127b222502f5b79b5fb0803061152a44f92b37e23c65c53d9e1b7c2514",
+        verdict: "MALICIOUS", vClass: "v-mal",
+        score: 78, staticScore: 70, dynamicScore: 8,
+        findings: [
+          { source: "static", rule: "shell_pipe_download", points: 25, reason: "pipes a download straight into a shell" },
+          { source: "static", rule: "ssh_key_touch", points: 25, reason: "touches SSH keys" },
+          { source: "static", rule: "persistence_cron", points: 20, reason: "tries to persist across reboots" },
+          { source: "dynamic", rule: "network_blocked", points: 8, reason: "network attempt blocked" }
+        ],
+        cpu: [2.0, 6.2, 15.0, 31.0, 48.0, 52.0, 38.0, 12.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        procs: [1, 2, 3, 4, 4, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      },
+      noisy: {
+        name: "noisy_worker.py", size: "2.1 KB",
+        sha256: "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+        verdict: "SUSPICIOUS", vClass: "v-sus",
+        score: 46, staticScore: 0, dynamicScore: 46,
+        findings: [
+          { source: "dynamic", rule: "process_burst", points: 25, reason: "process count burst (31 processes)" },
+          { source: "dynamic", rule: "mass_file_writes", points: 15, reason: "high file write rate (210 files/min)" },
+          { source: "dynamic", rule: "cpu_spike", points: 6, reason: "CPU spike" }
+        ],
+        cpu: [4.0, 18.0, 45.0, 72.0, 91.0, 96.0, 84.0, 60.0, 49.4, 49.2, 49.0, 48.8, 49.3, 49.1, 48.9, 49.4, 48.7, 49.2, 48.6, 49.0],
+        procs: [1, 3, 10, 20, 28, 31, 31, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30]
+      }
+    };
+
+    let currentFile = null;
+    let selectedSample = SAMPLES.harmless;
+
+    /* DOM elements */
+    const dropzone = document.getElementById("dropzone");
+    const browseBtn = document.getElementById("browseBtn");
+    const fileInput = document.getElementById("fileInput");
+    const fileDetails = document.getElementById("fileDetails");
+    const fileName = document.getElementById("fileName");
+    const fileSize = document.getElementById("fileSize");
+    const fileHash = document.getElementById("fileHash");
+    const scanBtn = document.getElementById("scanBtn");
+    const stepper = document.getElementById("stepper");
+    const resultCard = document.getElementById("resultCard");
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return "0 B";
+      const k = 1024, i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + ["B", "KB", "MB", "GB"][i];
+    }
+
+    async function calculateSHA256(file) {
+      try {
+        const buffer = await file.arrayBuffer();
+        const hashBuf = await crypto.subtle.digest("SHA-256", buffer);
+        return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+      } catch (e) {
+        return "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+      }
+    }
+
+    function pickSampleForFile(fname) {
+      const lower = fname.toLowerCase();
+      if (lower.endsWith(".sh")) return SAMPLES.harmless;
+      if (lower.endsWith(".exe") || lower.endsWith(".bin")) return SAMPLES.dropper;
+      return SAMPLES.noisy;
+    }
+
+    async function handleFile(file) {
+      currentFile = file;
+      fileDetails.style.display = "flex";
+      fileName.textContent = file.name; // User file text via textContent only
+      fileSize.textContent = formatBytes(file.size);
+      fileHash.textContent = "Computing SHA-256...";
+      selectedSample = pickSampleForFile(file.name);
+      fileHash.textContent = await calculateSHA256(file);
+    }
+
+    function setPresetDemo(key) {
+      selectedSample = SAMPLES[key];
+      currentFile = null;
+      fileDetails.style.display = "flex";
+      fileName.textContent = selectedSample.name; // TextContent rule
+      fileSize.textContent = selectedSample.size;
+      fileHash.textContent = selectedSample.sha256;
+      startScanAnimation();
+    }
+
+    browseBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", (e) => { if (e.target.files.length) handleFile(e.target.files[0]); });
+    dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+    dropzone.addEventListener("drop", (e) => {
+      e.preventDefault(); dropzone.classList.remove("dragover");
+      if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+
+    document.getElementById("demoHarmless").addEventListener("click", () => setPresetDemo("harmless"));
+    document.getElementById("demoDropper").addEventListener("click", () => setPresetDemo("dropper"));
+    document.getElementById("demoNoisy").addEventListener("click", () => setPresetDemo("noisy"));
+
+    scanBtn.addEventListener("click", () => {
+      if (!currentFile && !selectedSample) setPresetDemo("harmless");
+      else startScanAnimation();
+    });
+
+    /* 4-second animation through 4 stages */
+    let scanTimeout = null;
+    function startScanAnimation() {
+      if (scanTimeout) clearTimeout(scanTimeout);
+      resultCard.style.display = "none";
+      stepper.style.display = "flex";
+      scanBtn.disabled = true;
+
+      const stages = [document.getElementById("stage1"), document.getElementById("stage2"),
+                      document.getElementById("stage3"), document.getElementById("stage4")];
+      stages.forEach(s => s.classList.remove("active", "done"));
+
+      let step = 0;
+      function advance() {
+        if (step > 0) stages[step - 1].classList.replace("active", "done");
+        if (step < 4) {
+          stages[step].classList.add("active");
+          step++;
+          scanTimeout = setTimeout(advance, 1000); // 4 stages * 1000ms = 4.0s
+        } else {
+          stages[3].classList.replace("active", "done");
+          scanBtn.disabled = false;
+          renderResults();
+        }
+      }
+      advance();
+    }
+
+    function renderChartSvg(cpuArr, procArr) {
+      const w = 560, h = 140, pad = 30, innerW = w - pad * 2, innerH = h - pad * 2;
+      const ptsCpu = cpuArr.map((v, i) => `${(pad + (i / (cpuArr.length - 1)) * innerW).toFixed(1)},${(pad + innerH - (Math.min(v, 100) / 100) * innerH).toFixed(1)}`).join(" ");
+      const ptsProc = procArr.map((v, i) => `${(pad + (i / (procArr.length - 1)) * innerW).toFixed(1)},${(pad + innerH - (Math.min(v, 40) / 40) * innerH).toFixed(1)}`).join(" ");
+
+      return `
+        <svg viewBox="0 0 ${w} ${h}" style="width:100%; height:auto; display:block;">
+          <line x1="${pad}" y1="${pad}" x2="${w-pad}" y2="${pad}" stroke="#1f2937" stroke-dasharray="3"/>
+          <line x1="${pad}" y1="${pad + innerH/2}" x2="${w-pad}" y2="${pad + innerH/2}" stroke="#1f2937" stroke-dasharray="3"/>
+          <line x1="${pad}" y1="${pad + innerH}" x2="${w-pad}" y2="${pad + innerH}" stroke="#374151"/>
+          <text x="${pad - 6}" y="${pad + 4}" fill="#6b7280" font-size="10" text-anchor="end">100%</text>
+          <text x="${pad - 6}" y="${pad + innerH + 3}" fill="#6b7280" font-size="10" text-anchor="end">0%</text>
+          <polyline points="${ptsCpu}" fill="none" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round"/>
+          <polyline points="${ptsProc}" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      `;
+    }
+
+    function renderResults() {
+      const data = selectedSample;
+      resultCard.style.display = "flex";
+
+      // File name safely set via textContent
+      document.getElementById("resFileName").textContent = currentFile ? currentFile.name : data.name;
+
+      const badge = document.getElementById("verdictBadge");
+      badge.textContent = data.verdict;
+      badge.className = "verdict-badge " + data.vClass;
+
+      document.getElementById("scoreTotal").textContent = data.score;
+      document.getElementById("scoreStatic").textContent = data.staticScore + " pts";
+      document.getElementById("scoreDynamic").textContent = data.dynamicScore + " pts";
+      document.getElementById("barStatic").style.width = data.staticScore + "%";
+      document.getElementById("barDynamic").style.width = data.dynamicScore + "%";
+
+      const tbody = document.getElementById("findingsBody");
+      tbody.innerHTML = "";
+      if (data.findings.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4" style="color:var(--safe); text-align:center; padding:12px;">No issues observed in baseline profile (0 findings)</td></tr>`;
+      } else {
+        data.findings.forEach(f => {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td><span class="tag-src ${f.source === 'static' ? 'tag-static' : 'tag-dynamic'}">${f.source}</span></td>
+            <td><code>${f.rule}</code></td>
+            <td style="font-weight:bold; color:#f87171;">+${f.points}</td>
+            <td>${f.reason}</td>
+          `;
+          tbody.appendChild(row);
+        });
+      }
+      document.getElementById("svgChartWrapper").innerHTML = renderChartSvg(data.cpu, data.procs);
+    }
+  </script>
+</body>
+</html>
+

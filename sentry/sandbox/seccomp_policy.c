@@ -217,6 +217,10 @@ static int install_standard(scmp_filter_ctx ctx)
     ALLOW(ctx, getcwd);
     ALLOW(ctx, readlink);
     ALLOW(ctx, readlinkat);
+    /* read-only: lets ls -l list xattrs */
+    ALLOW(ctx, listxattr);
+    ALLOW(ctx, llistxattr);
+    ALLOW(ctx, flistxattr);
     ALLOW(ctx, fcntl);
     ALLOW(ctx, ioctl);
     ALLOW(ctx, umask);
@@ -401,6 +405,10 @@ static int install_permissive(scmp_filter_ctx ctx)
     ALLOW(ctx, signalfd4);
     ALLOW(ctx, eventfd2);
     ALLOW(ctx, getrandom);
+    /* read-only: lets ls -l list xattrs */
+    ALLOW(ctx, listxattr);
+    ALLOW(ctx, llistxattr);
+    ALLOW(ctx, flistxattr);
     ALLOW(ctx, copy_file_range);
     ALLOW(ctx, sendfile);
     ALLOW(ctx, splice);

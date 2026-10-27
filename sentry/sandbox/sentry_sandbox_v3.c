@@ -196,13 +196,8 @@ static int setup_filesystem(const char *sandbox_root)
         return -1;
     }
 
-    /* Step D: Mount a tmpfs over the sandbox root as a scratch layer.
-     *         Writes inside the sandbox are discarded when the process exits.
-     *         (Full overlayfs would need an upper/work dir; tmpfs is simpler.) */
-    if (mount("tmpfs", sandbox_root, "tmpfs", 0, "size=64m,mode=0755") != 0) {
-        perror("[sandbox] mount: tmpfs scratch");
-        return -1;
-    }
+    /* Step D: The sandbox root is mounted read-only; writable areas are only
+     * the tmpfs mounts on /tmp and /dev. */
 
     /* Step E: Re-mount /proc inside sandbox_root (read-only after pivot) */
     snprintf(path, sizeof(path), "%s/proc", sandbox_root);
@@ -218,29 +213,8 @@ static int setup_filesystem(const char *sandbox_root)
         }
     }
 
-    /* Step F: Minimal /dev (only null, zero, urandom) */
-    snprintf(path, sizeof(path), "%s/dev", sandbox_root);
-    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
-        fprintf(stderr, "[sandbox] mkdir %s: %s\n", path, strerror(errno));
-    }
-    if (mount("tmpfs", path, "tmpfs", 0, "size=64k,mode=0755") != 0) {
-        perror("[sandbox] mount: tmpfs /dev (non-fatal)");
-    } else {
-        /* Bind-mount safe devices from host */
-        const char *safe_devs[] = { "null", "zero", "urandom", NULL };
-        for (int i = 0; safe_devs[i]; i++) {
-            char host_dev[64], sandbox_dev[512];
-            snprintf(host_dev,    sizeof(host_dev),    "/dev/%s", safe_devs[i]);
-            snprintf(sandbox_dev, sizeof(sandbox_dev), "%s/dev/%s", sandbox_root, safe_devs[i]);
-            /* Create the node target */
-            int fd = open(sandbox_dev, O_CREAT | O_WRONLY, 0666);
-            if (fd >= 0) close(fd);
-            if (mount(host_dev, sandbox_dev, NULL, MS_BIND, NULL) != 0) {
-                fprintf(stderr, "[sandbox] bind /dev/%s (non-fatal): %s\n",
-                        safe_devs[i], strerror(errno));
-            }
-        }
-    }
+    /* Step F: Real device nodes (null, zero, urandom) already exist in <root>/dev.
+     * Do NOT mount a tmpfs over /dev. */
 
     /* Step G: Fresh tmpfs on /tmp inside sandbox */
     snprintf(path, sizeof(path), "%s/tmp", sandbox_root);
@@ -266,8 +240,21 @@ static int setup_filesystem(const char *sandbox_root)
         return -1;
     }
 
+    /* Check that /dev/null, /dev/zero and /dev/urandom can be opened for reading */
+    int dev_failures = 0;
+    const char *check_devs[] = { "/dev/null", "/dev/zero", "/dev/urandom", NULL };
+    for (int i = 0; check_devs[i]; i++) {
+        int fd = open(check_devs[i], O_RDONLY);
+        if (fd >= 0) {
+            close(fd);
+        } else {
+            dev_failures++;
+        }
+    }
+
     /* Step I: Mask dangerous /proc paths by bind-mounting /dev/null over them.
      *         This must happen AFTER pivot_root so paths are relative to new root. */
+    int proc_mask_failures = 0;
     const char *dangerous_proc_paths[] = {
         "/proc/sysrq-trigger",
         "/proc/sys/kernel/core_pattern",
@@ -279,7 +266,10 @@ static int setup_filesystem(const char *sandbox_root)
             if (mount("/dev/null", dangerous_proc_paths[i], NULL, MS_BIND, NULL) != 0) {
                 fprintf(stderr, "[sandbox] mask %s (non-fatal): %s\n",
                         dangerous_proc_paths[i], strerror(errno));
+                proc_mask_failures++;
             }
+        } else {
+            proc_mask_failures++;
         }
     }
 
@@ -292,8 +282,19 @@ static int setup_filesystem(const char *sandbox_root)
     }
 
     printf("  ✓ pivot_root complete (read-only base + tmpfs scratch)\n");
-    printf("  ✓ Minimal /dev (null, zero, urandom)\n");
-    printf("  ✓ /proc masked (sysrq-trigger, core_pattern, kcore)\n");
+
+    if (dev_failures == 0) {
+        printf("  ✓ Minimal /dev\n");
+    } else {
+        fprintf(stderr, "  ✗ Minimal /dev: %d failed\n", dev_failures);
+    }
+
+    if (proc_mask_failures == 0) {
+        printf("  ✓ /proc masked\n");
+    } else {
+        fprintf(stderr, "  ✗ /proc masked: %d failed\n", proc_mask_failures);
+    }
+
     printf("  ✓ Fresh tmpfs on /tmp\n");
     return 0;
 }
@@ -328,6 +329,9 @@ static int bring_up_loopback(void)
 
 static int child_fn(void *arg)
 {
+    /* Ensure the child is killed when the parent exits (even on SIGKILL). */
+    prctl(PR_SET_PDEATHSIG, SIGKILL);
+
     setbuf(stdout, NULL);
     struct sandbox_config *cfg = (struct sandbox_config *)arg;
 
@@ -365,6 +369,11 @@ static int child_fn(void *arg)
         fprintf(stderr, "  Warning: could not bring up loopback.\n");
     }
 
+    /* Become a new session leader — detach from controlling terminal. */
+    if (setsid() < 0) {
+        perror("[sandbox] setsid (non-fatal)");
+    }
+
     /* Part 1.1 — Drop all capabilities */
     if (drop_all_capabilities() != 0) {
         fprintf(stderr, "[sandbox] Warning: could not drop all capabilities\n");
@@ -377,6 +386,18 @@ static int child_fn(void *arg)
     printf("  ✓ Network namespace isolated (loopback only)\n");
     printf("  ✓ User namespace isolated (no host capabilities)\n");
     fflush(stdout);
+
+    /*
+     * Close all file descriptors >= 3 before installing seccomp so that no
+     * inherited fds (including cfg->control_fd) survive into the exec'd child.
+     * Try the Linux 5.9+ close_range(2) fast path first; fall back to a loop.
+     */
+    if (syscall(SYS_close_range, 3, ~0U, 0) != 0) {
+        int max_fd = getdtablesize();
+        for (int fd = 3; fd < max_fd; fd++) {
+            close(fd);
+        }
+    }
 
     /*
      * Seccomp MUST be installed AFTER filesystem setup and BEFORE exec.
@@ -437,8 +458,8 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
     cfg->seccomp_mode   = seccomp_mode;
     cfg->ready_pipe_rd  = pipefd[0];
     cfg->ready_pipe_wr  = pipefd[1];
-    cfg->host_uid       = getuid();
-    cfg->host_gid       = getgid();
+    cfg->host_uid       = 65534;
+    cfg->host_gid       = 65534;
 
     /*
      * Part 1.1 — CLONE_NEWUSER allows unprivileged user namespaces.

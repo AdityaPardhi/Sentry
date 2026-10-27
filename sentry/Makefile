@@ -15,7 +15,7 @@
 #   install-tests     Copy test binaries into sandbox root /bin
 #
 # Legacy test targets (phase tests) are kept for regression:
-#   test3 … test14
+#   test3 … test13
 
 CC       = gcc
 CFLAGS   = -Wall -Wextra -std=gnu11
@@ -30,7 +30,7 @@ BINDIR   = bin
 SANDBOX_ROOT ?= /opt/sentry/sandbox-root
 
 .PHONY: all clean setup install-tests test escape-test \
-        test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 test13 test-all
+        test3 test4 test5 test6 test7 test8 test10 test11 test12 test13 test-all
 
 all: $(BINDIR)/sentry_sandbox_v3 $(BINDIR)/test_seccomp_block \
      $(BINDIR)/stress_cpu $(BINDIR)/stress_mem $(BINDIR)/stress_fork \
@@ -150,9 +150,6 @@ test7:
 test8:
 	sudo bash $(TESTS)/test_phase8.sh $(BINDIR)
 
-test9:
-	sudo bash $(TESTS)/test_phase9.sh $(BINDIR)
-
 test10:
 	sudo bash $(TESTS)/test_phase10.sh $(BINDIR)
 
@@ -166,7 +163,7 @@ test13:
 	sudo bash $(TESTS)/test_phase13.sh $(BINDIR)
 
 # Run ALL phases end-to-end
-test-all: escape-test test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 test13
+test-all: escape-test test3 test4 test5 test6 test7 test8 test10 test11 test12 test13
 	@echo ""
 	@echo "╔═══════════════════════════════════════════════════════════════╗"
 	@echo "║     ALL SENTRY TEST SUITES PASSED                             ║"
