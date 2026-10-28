@@ -30,6 +30,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/prctl.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 
 #include <seccomp.h>
 
@@ -222,7 +224,26 @@ static int install_standard(scmp_filter_ctx ctx)
     ALLOW(ctx, llistxattr);
     ALLOW(ctx, flistxattr);
     ALLOW(ctx, fcntl);
-    ALLOW(ctx, ioctl);
+#ifdef TCGETS2
+#undef TCGETS2
+#endif
+#define TCGETS2 0x802c542aUL
+    /* restricted: blocks TIOCSTI and terminal-injection ioctls */
+    {
+        const unsigned long allowed_ioctls[] = {
+            TCGETS, TCGETS2, TIOCGWINSZ, TIOCGPGRP, FIONREAD, FIONBIO, FIOCLEX, FIONCLEX
+        };
+        for (size_t i = 0; i < sizeof(allowed_ioctls) / sizeof(allowed_ioctls[0]); i++) {
+            int _r = seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(ioctl), 1,
+                                      SCMP_CMP(1, SCMP_CMP_EQ, allowed_ioctls[i]));
+            if (_r != 0) {
+                fprintf(stderr, "[seccomp] Failed to allow ioctl(0x%lx): %s\n",
+                        allowed_ioctls[i], strerror(-_r));
+                seccomp_release(ctx);
+                return -1;
+            }
+        }
+    }
     ALLOW(ctx, umask);
     ALLOW(ctx, statfs);
     ALLOW(ctx, fstatfs);

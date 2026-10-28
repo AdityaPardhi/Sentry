@@ -90,23 +90,35 @@ run_escape_test() {
 
     # Run inside the sandbox with the strictest profile
     local exit_code=0
+    local stderr_log
+    stderr_log=$(mktemp)
     sudo "${SANDBOX}" run /bin/escape_test \
         --profile strict --seccomp standard \
-        2>/dev/null || exit_code=$?
+        2>"${stderr_log}" || exit_code=$?
+
+    grep '^\[escape\]' "${stderr_log}" || true
+    rm -f "${stderr_log}"
 
     local files_ok=0
     check_sentinels "$before" && files_ok=1
 
-    # A blocked syscall returns 128+SIGSYS(31)=159, or SIGKILL=128+9=137
-    local blocked=false
-    if [ "$exit_code" -ne 0 ]; then
-        blocked=true
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local has_escape=false
+    if [ -f "${script_dir}/escape_src/${name}.c" ] && grep -q "escape!" "${script_dir}/escape_src/${name}.c"; then
+        has_escape=true
     fi
 
-    if $blocked && [ "$files_ok" -eq 1 ]; then
+    if [ "$exit_code" -eq 126 ] || [ "$exit_code" -eq 127 ]; then
+        echo -e "${RED}  FAIL${NC} — test program did not run (exit=${exit_code})"
+        FAIL=$((FAIL + 1))
+    elif [ "$exit_code" -eq 0 ] && $has_escape; then
+        echo -e "${RED}  FAIL${NC} — exit=0 (escape succeeded)"
+        FAIL=$((FAIL + 1))
+    elif [ "$exit_code" -ne 0 ] && [ "$files_ok" -eq 1 ]; then
         echo -e "${GREEN}  PASS${NC} — escape blocked (exit=${exit_code}), host files unchanged"
         PASS=$((PASS + 1))
-    elif ! $blocked && [ "$expect_killed" = "false" ] && [ "$files_ok" -eq 1 ]; then
+    elif [ "$exit_code" -eq 0 ] && [ "$expect_killed" = "false" ] && [ "$files_ok" -eq 1 ]; then
         echo -e "${GREEN}  PASS${NC} — returned 0 but host files unchanged (escape blocked at fs level)"
         PASS=$((PASS + 1))
     else
@@ -171,6 +183,16 @@ run_escape_test \
     "raw_socket" \
     "${ESCAPE_BIN}/raw_socket" \
     "Tries socket(AF_INET, SOCK_RAW, 0) — blocked by seccomp AF_UNIX-only policy"
+
+run_escape_test \
+    "tiocsti_inject" \
+    "${ESCAPE_BIN}/tiocsti_inject" \
+    "Tries ioctl TIOCSTI and TIOCSCTTY — blocked by seccomp ioctl policy"
+
+run_escape_test \
+    "fd_leak" \
+    "${ESCAPE_BIN}/fd_leak" \
+    "Scans /proc/self/fd for leaked fds >= 3"
 
 # -----------------------------------------------------------------------
 # Summary

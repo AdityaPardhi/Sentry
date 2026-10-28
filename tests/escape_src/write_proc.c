@@ -9,6 +9,9 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
 
 int main(void)
 {
@@ -20,12 +23,20 @@ int main(void)
     }
 
     ssize_t n = write(fd, "b", 1);  /* 'b' = reboot */
-    close(fd);
-    if (n >= 0) {
+    if (n < 0) {
         fprintf(stderr, "[escape] write(%s): %s — blocked\n", path, strerror(errno));
+        close(fd);
         return 1;
     }
 
-    fprintf(stderr, "[escape] WRITE TO %s SUCCEEDED — escape!\n", path);
+    struct stat st;
+    if (fstat(fd, &st) == 0 && S_ISCHR(st.st_mode) && st.st_rdev == makedev(1, 3)) {
+        fprintf(stderr, "[escape] neutralised: masked to /dev/null\n");
+        close(fd);
+        return 1;
+    }
+
+    close(fd);
+    fprintf(stderr, "[escape] WRITE SUCCEEDED — escape!\n");
     return 0;  /* escape succeeded — test will FAIL */
 }

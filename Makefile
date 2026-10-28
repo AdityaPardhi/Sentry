@@ -95,9 +95,16 @@ $(ESCAPE_BIN)/fork_bomb: $(ESCAPE_SRC)/fork_bomb.c | $(ESCAPE_BIN)
 $(ESCAPE_BIN)/raw_socket: $(ESCAPE_SRC)/raw_socket.c | $(ESCAPE_BIN)
 	$(CC) -O0 -o $@ $< $(LDFLAGS)
 
+$(ESCAPE_BIN)/tiocsti_inject: $(ESCAPE_SRC)/tiocsti_inject.c | $(ESCAPE_BIN)
+	$(CC) -O0 -o $@ $< $(LDFLAGS)
+
+$(ESCAPE_BIN)/fd_leak: $(ESCAPE_SRC)/fd_leak.c | $(ESCAPE_BIN)
+	$(CC) -O0 -o $@ $< $(LDFLAGS)
+
 escape-binaries: $(ESCAPE_BIN)/read_host_file $(ESCAPE_BIN)/write_proc \
                  $(ESCAPE_BIN)/mknod_dev $(ESCAPE_BIN)/chroot_escape \
-                 $(ESCAPE_BIN)/fork_bomb $(ESCAPE_BIN)/raw_socket
+                 $(ESCAPE_BIN)/fork_bomb $(ESCAPE_BIN)/raw_socket \
+                 $(ESCAPE_BIN)/tiocsti_inject $(ESCAPE_BIN)/fd_leak
 
 # Run the escape test suite (requires sudo)
 test: escape-test

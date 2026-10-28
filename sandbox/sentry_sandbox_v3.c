@@ -48,6 +48,16 @@
 #include <errno.h>
 #include <linux/capability.h>
 
+#ifndef PR_CAPBSET_DROP
+#define PR_CAPBSET_DROP 24
+#endif
+#ifndef PR_CAP_AMBIENT
+#define PR_CAP_AMBIENT 47
+#endif
+#ifndef PR_CAP_AMBIENT_CLEAR_ALL
+#define PR_CAP_AMBIENT_CLEAR_ALL 4
+#endif
+
 #include "cgroup.h"
 #include "seccomp_policy.h"
 
@@ -147,6 +157,31 @@ static int drop_all_capabilities(void)
     /* First: prevent any future privilege escalation */
     if (prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0) {
         perror("[sandbox] prctl PR_SET_KEEPCAPS");
+        return -1;
+    }
+
+    /* Read highest capability number from /proc/sys/kernel/cap_last_cap */
+    FILE *f = fopen("/proc/sys/kernel/cap_last_cap", "r");
+    if (!f) {
+        perror("[sandbox] fopen /proc/sys/kernel/cap_last_cap");
+        return -1;
+    }
+    int last_cap = -1;
+    if (fscanf(f, "%d", &last_cap) != 1) {
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+
+    for (int cap = 0; cap <= last_cap; cap++) {
+        if (prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) != 0) {
+            perror("[sandbox] prctl PR_CAPBSET_DROP");
+            return -1;
+        }
+    }
+
+    if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0) {
+        perror("[sandbox] prctl PR_CAP_AMBIENT_CLEAR_ALL");
         return -1;
     }
 
@@ -376,7 +411,8 @@ static int child_fn(void *arg)
 
     /* Part 1.1 — Drop all capabilities */
     if (drop_all_capabilities() != 0) {
-        fprintf(stderr, "[sandbox] Warning: could not drop all capabilities\n");
+        fprintf(stderr, "[sandbox] Failed to drop all capabilities\n");
+        return EXIT_FAILURE;
     }
 
     printf("  ✓ PID namespace isolated\n");
