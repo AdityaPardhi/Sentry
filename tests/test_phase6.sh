@@ -43,7 +43,7 @@ fi
 
 # Ensure stress_net binary is compiled and installed into sandbox root
 if [ ! -f "${BINDIR}/stress_net" ]; then
-    gcc -O2 -o "${BINDIR}/stress_net" tests/stress_net.c
+    gcc -O2 -o "${BINDIR}/stress_net" tests/samples/harmful/resource-abuse/stress_net.c
 fi
 
 if [ -d "${SANDBOX_ROOT}/bin" ]; then
