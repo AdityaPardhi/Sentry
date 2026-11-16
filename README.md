@@ -82,20 +82,20 @@ sentry/
   ```
 - Root privileges (`sudo`) for namespace and cgroup operations
 
-### Compilation & Sandbox Root Setup
+### Run the Demo
+
 ```bash
-cd sentry/
-make setup            # Sets up minimal root filesystem at /opt/sentry/sandbox-root
-make                  # Compiles sentry_sandbox_v3 and all test helpers
-make install-tests    # Copies stress test binaries into sandbox root
+make demo
 ```
 
-### Run the Escape Test Suite
-```bash
-make test             # Builds escape binaries and runs tests/escape_tests.sh (requires sudo)
-```
+Then open **http://localhost:8080** in your browser.
 
-All 6 tests should print **PASS** — verifying the sandbox blocks every escape attempt.
+`make demo` will:
+1. Build the sandbox binary (`make`) if `bin/sentry_sandbox_v3` is missing.
+2. Set up the sandbox root filesystem (`sudo make setup`) if it has not been set up yet.
+3. Start the web UI at http://localhost:8080.
+
+Set `GEMINI_API_KEY` in a `.env` file at the project root to enable AI explanations.
 
 ---
 

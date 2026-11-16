@@ -31,6 +31,7 @@ from monitor.file_monitor import FileMonitor, FileEvent
 from monitor.network_monitor import NetworkMonitor, NetworkSample
 from monitor.risk_engine import RiskEngine, RiskAssessment
 from monitor.response_engine import ResponseEngine, Incident
+from cli.report import build_report
 
 
 def find_sandbox_binary(name: str = "sentry_sandbox_v3") -> str:
@@ -687,6 +688,9 @@ def cmd_run(args: argparse.Namespace, remaining_cmd: List[str]) -> None:
             print(f"                   Peak Risk Score: {peak_risk}/100 ({max_band})")
             if incidents:
                 print(f"                   Mitigation Actions: {len(incidents)} automated responses executed")
+
+
+
 
 
 def main():

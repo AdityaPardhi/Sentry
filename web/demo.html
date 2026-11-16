@@ -21,6 +21,7 @@
     header { text-align: center; }
     .badge { display: inline-block; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 4px 10px; border-radius: 9999px; }
     .badge-sim { background: #1e293b; color: #fbbf24; border: 1px solid #4b5563; margin-bottom: 8px; }
+    .badge-live { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid var(--safe); margin-bottom: 8px; }
     h1 { font-size: 2rem; font-weight: 800; color: #fff; margin: 4px 0 8px; }
     .tagline { color: var(--text-muted); font-size: 1.05rem; max-width: 650px; margin: 0 auto; }
 
@@ -46,6 +47,7 @@
     .btn-demo:hover { background: #334155; color: #fff; }
     .btn-scan { margin-top: 16px; width: 100%; background: #0284c7; color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: 700; font-size: 0.95rem; cursor: pointer; }
     .btn-scan:hover { background: #0369a1; }
+    .btn-scan:disabled { opacity: 0.6; cursor: not-allowed; }
 
     /* Stepper Animation */
     .stepper { display: flex; justify-content: space-between; margin-top: 18px; }
@@ -62,6 +64,7 @@
     .v-safe { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid var(--safe); }
     .v-sus { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid var(--warn); }
     .v-mal { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid var(--danger); }
+    .v-grey { background: rgba(156, 163, 175, 0.2); color: #9ca3af; border: 1px solid #6b7280; }
 
     /* Score Bar & Tables */
     .score-box { background: #0f172a; border-radius: 8px; padding: 12px; }
@@ -75,7 +78,12 @@
     .tag-src { font-family: var(--font-mono); font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; font-weight: 600; }
     .tag-static { background: #312e81; color: #a5b4fc; }
     .tag-dynamic { background: #701a75; color: #f472b6; }
+    .tag-seccomp { background: #7f1d1d; color: #fca5a5; }
+    .tag-file { background: #14532d; color: #86efac; }
+    .tag-process { background: #701a75; color: #f472b6; }
     .pass-pill { color: var(--safe); font-weight: bold; }
+    .observed-pill { color: var(--safe); font-weight: 700; font-size: 0.75rem; text-transform: uppercase; background: rgba(16, 185, 129, 0.12); padding: 2px 6px; border-radius: 4px; }
+    .not-monitored-pill { color: #f59e0b; font-weight: 700; font-size: 0.75rem; text-transform: uppercase; background: rgba(245, 158, 11, 0.12); padding: 2px 6px; border-radius: 4px; }
 
     /* Chart & Notes */
     .chart-box { background: #0f172a; border-radius: 8px; padding: 12px; }
@@ -91,13 +99,29 @@
       .pipe-card { width: 100%; }
       .verdict-header { flex-direction: column; align-items: flex-start; }
     }
+    body { background: radial-gradient(circle at 50% 20%, #1e293b 0%, #0f172a 100%); }
+    .logo { font-size: 2.2rem; filter: drop-shadow(0 0 12px rgba(56,189,248,0.6)); animation: floatLogo 4s ease-in-out infinite; margin-bottom: 8px; }
+    @keyframes floatLogo { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+    h1 { background: linear-gradient(135deg, #f8fafc, #38bdf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .badge-off { background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+    .panel, .pipe-card { background: linear-gradient(180deg, rgba(30,41,59,0.7), rgba(15,23,42,0.8)); box-shadow: 0 8px 32px rgba(0,0,0,0.37); backdrop-filter: blur(8px); }
+    .pipe-card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .pipe-card:hover { transform: translateY(-4px); box-shadow: 0 12px 28px rgba(0,0,0,0.5); }
+    .dropzone:hover { box-shadow: 0 0 20px rgba(56,189,248,0.3); border-color: var(--accent); }
+    .btn-scan { background: linear-gradient(135deg, #2563eb, #38bdf8); transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .btn-scan:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(37,99,235,0.4); }
+    .result-card { animation: fadeUp 0.4s ease-out; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+    .step-item.active .step-dot { animation: pulseGlow 1.5s infinite; }
+    @keyframes pulseGlow { 0%, 100% { box-shadow: 0 0 0 0 rgba(56,189,248,0.7); } 50% { box-shadow: 0 0 0 8px rgba(56,189,248,0); } }
   </style>
 </head>
 <body>
   <div class="container">
     <!-- 1. Header -->
     <header>
-      <div class="badge badge-sim">SIMULATED RESULT — demo data, not a real scan.</div>
+      <div class="logo">🛡️</div>
+      <div class="badge badge-live" id="headerBadge">Connecting to scanner…</div>
       <h1>SENTRY — Is this file safe?</h1>
       <p class="tagline">A Linux sandbox that runs untrusted files in isolation and watches what they do.</p>
     </header>
@@ -146,29 +170,40 @@
         <div><strong>SHA-256:</strong> <code id="fileHash">Computing...</code></div>
       </div>
 
-      <div class="quick-demos">
-        <span>Quick demo scenarios:</span>
-        <button type="button" class="btn-demo" id="demoHarmless">Harmless script</button>
-        <button type="button" class="btn-demo" id="demoDropper">Fake dropper</button>
-        <button type="button" class="btn-demo" id="demoNoisy">Noisy script</button>
-      </div>
+      <details style="margin-top: 14px; display: none;">
+        <summary style="cursor: pointer; font-size: 0.85rem; color: var(--accent); font-weight: 600;">Examples (Demo Scenarios)</summary>
+        <div class="quick-demos" style="margin-top: 8px;">
+          <span>Quick demo scenarios:</span>
+          <button type="button" class="btn-demo" id="demoHarmless">Harmless script</button>
+          <button type="button" class="btn-demo" id="demoDropper">Fake dropper</button>
+          <button type="button" class="btn-demo" id="demoNoisy">Noisy script</button>
+          <button type="button" class="btn-demo" id="demoT1">t1_clean</button>
+          <button type="button" class="btn-demo" id="demoT2">t2_file_drop</button>
+          <button type="button" class="btn-demo" id="demoT3">t3_secret_reader</button>
+          <button type="button" class="btn-demo" id="demoT4">t4_network</button>
+          <button type="button" class="btn-demo" id="demoT5">t5_spawner</button>
+        </div>
+      </details>
 
       <button type="button" class="btn-scan" id="scanBtn">Scan Selected File</button>
 
+      <div id="scanError" style="display:none; margin-top:14px; padding:10px 14px; background:rgba(239, 68, 68, 0.15); border:1px solid #ef4444; border-radius:8px; color:#fca5a5; font-size:0.85rem;"></div>
+
       <div class="stepper" id="stepper" style="display:none;">
-        <div class="step-item" id="stage1"><div class="step-dot">1</div><div class="step-label">Static checks</div></div>
-        <div class="step-item" id="stage2"><div class="step-dot">2</div><div class="step-label">Starting sandbox</div></div>
-        <div class="step-item" id="stage3"><div class="step-dot">3</div><div class="step-label">Monitoring</div></div>
-        <div class="step-item" id="stage4"><div class="step-dot">4</div><div class="step-label">Verdict</div></div>
+        <div class="step-item" id="stage1"><div class="step-dot">1</div><div class="step-label" id="stageLabel1">Static checks</div></div>
+        <div class="step-item" id="stage2"><div class="step-dot">2</div><div class="step-label" id="stageLabel2">Starting sandbox</div></div>
+        <div class="step-item" id="stage3"><div class="step-dot">3</div><div class="step-label" id="stageLabel3">Monitoring</div></div>
+        <div class="step-item" id="stage4"><div class="step-dot">4</div><div class="step-label" id="stageLabel4">Verdict</div></div>
       </div>
     </section>
 
     <!-- 4. Result card -->
     <section class="panel result-card" id="resultCard" style="display:none;">
+      <!-- 1. Verdict banner with score and thresholds -->
       <div class="verdict-header">
         <div>
-          <span class="badge badge-sim">SIMULATED RESULT — demo data, not a real scan.</span>
-          <h2 style="font-size: 1.1rem; margin-top: 4px;">Target: <span id="resFileName"></span></h2>
+          <span class="badge badge-live" id="cardBadge">Scan result</span>
+          <h2 style="font-size: 1.15rem; margin-top: 4px;">Target: <span id="resFileName"></span></h2>
         </div>
         <div class="verdict-badge" id="verdictBadge"></div>
       </div>
@@ -182,22 +217,96 @@
           <div class="bar-static" id="barStatic" style="width:0%"></div>
           <div class="bar-dynamic" id="barDynamic" style="width:0%"></div>
         </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.75rem; color:var(--text-muted); margin-top:6px;">
+          <span>Thresholds: Suspicious &ge; <strong style="color:#fbbf24;">21</strong>, Malicious &ge; <strong style="color:#f87171;">61</strong></span>
+          <span id="resExitStatus" style="font-family:var(--font-mono);"></span>
+        </div>
       </div>
 
-      <div>
-        <div style="font-weight:700; font-size:0.9rem; margin-bottom:8px;">Identified Behavioral Findings</div>
+      <div class="file-details" style="margin-top:0; display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px;">
+        <div><strong>File:</strong> <span id="metaFileName"></span></div>
+        <div><strong>Size:</strong> <span id="metaFileSize"></span></div>
+        <div><strong>Type:</strong> <span id="metaFileType"></span></div>
+        <div><strong>SHA-256:</strong> <code id="metaFileHash" style="word-break:break-all;"></code></div>
+        <div><strong>Duration:</strong> <span id="metaDuration"></span></div>
+      </div>
+
+      <!-- 2. "What was checked" table -->
+      <div id="whatWasCheckedSection">
+        <div style="font-weight:700; font-size:0.95rem; margin-bottom:8px; color:#fff;">What was checked</div>
         <table>
-          <thead><tr><th>Source</th><th>Rule</th><th>Points</th><th>Reason</th></tr></thead>
+          <thead>
+            <tr>
+              <th style="width: 28%;">Inspection Target</th>
+              <th style="width: 24%;">Status</th>
+              <th>Observed Evidence</th>
+            </tr>
+          </thead>
+          <tbody id="whatWasCheckedBody"></tbody>
+        </table>
+      </div>
+
+      <!-- 3. Findings table with points -->
+      <div>
+        <div style="font-weight:700; font-size:0.95rem; margin-bottom:8px; color:#fff;">Identified Findings</div>
+        <table>
+          <thead><tr><th style="width: 18%;">Category</th><th style="width: 14%;">Points</th><th>Finding &amp; Reason</th></tr></thead>
           <tbody id="findingsBody"></tbody>
         </table>
       </div>
 
-      <div class="chart-box">
+      <div id="notesSection" style="display:none;">
+        <div style="font-weight:700; font-size:0.9rem; margin-bottom:6px;">Notes</div>
+        <ul id="notesList" style="margin-left: 20px; font-size: 0.82rem; color: #cbd5e1; display:flex; flex-direction:column; gap:4px;"></ul>
+      </div>
+
+      <div class="chart-box" id="chartBox">
         <div class="chart-legend">
           <div class="leg-item"><div class="leg-color" style="background:#38bdf8;"></div> CPU Usage %</div>
           <div class="leg-item"><div class="leg-color" style="background:#f59e0b;"></div> Active Processes</div>
         </div>
         <div id="svgChartWrapper"></div>
+      </div>
+
+      <!-- 4. AI overview card -->
+      <div id="aiExplanationCard" style="display:none; background:#0f172a; border:1px solid #1e3a5f; border-radius:10px; padding:18px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <div style="font-weight:700; font-size:1rem; color:#38bdf8;">🤖 AI Overview</div>
+          <div id="aiRiskBadge" style="font-size:0.75rem; font-weight:700; padding:3px 8px; border-radius:4px; text-transform:uppercase;"></div>
+        </div>
+        <div id="aiExplanationError" style="display:none; font-size:0.75rem; color:#f87171; margin-bottom:10px; padding:6px 10px; background:rgba(239,68,68,0.1); border-radius:4px;"></div>
+        <div style="display:flex; flex-direction:column; gap:12px; font-size:0.85rem; color:#e2e8f0; line-height:1.5;">
+          <div>
+            <div style="font-weight:600; color:#9ca3af; font-size:0.78rem; text-transform:uppercase; margin-bottom:2px;">Summary</div>
+            <div id="aiSummary" style="color:#f3f4f6;"></div>
+          </div>
+          <div>
+            <div style="font-weight:600; color:#9ca3af; font-size:0.78rem; text-transform:uppercase; margin-bottom:2px;">What It Did</div>
+            <div id="aiWhatItDid"></div>
+          </div>
+          <div>
+            <div style="font-weight:600; color:#9ca3af; font-size:0.78rem; text-transform:uppercase; margin-bottom:2px;">Why Flagged</div>
+            <ul id="aiWhyFlagged" style="margin-left:20px; display:flex; flex-direction:column; gap:4px;"></ul>
+          </div>
+          <div>
+            <div style="font-weight:600; color:#9ca3af; font-size:0.78rem; text-transform:uppercase; margin-bottom:2px;">Recommended Action</div>
+            <div id="aiRecommendedAction" style="color:#fbbf24;"></div>
+          </div>
+          <div>
+            <div style="font-weight:600; color:#9ca3af; font-size:0.78rem; text-transform:uppercase; margin-bottom:2px;">Limitations</div>
+            <ul id="aiLimitations" style="margin-left:20px; color:#9ca3af; font-size:0.8rem; display:flex; flex-direction:column; gap:2px;"></ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. Collapsed raw sandbox log -->
+      <details id="sandboxLogDetails" style="background:#0f172a; border-radius:8px; padding:12px;">
+        <summary style="cursor:pointer; font-weight:600; color:#cbd5e1; font-size:0.85rem;">Raw Sandbox Log</summary>
+        <pre id="sandboxLog" style="margin-top:8px; font-family:var(--font-mono); font-size:0.75rem; color:#9ca3af; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto;"></pre>
+      </details>
+
+      <div>
+        <button type="button" class="drop-btn" id="downloadReportBtn">Download report (JSON)</button>
       </div>
 
       <div class="safety-note">
@@ -240,47 +349,101 @@
   </div>
 
   <script>
-    /* Built-in sample objects */
+    const SENTRY_TOKEN = "__SENTRY_TOKEN__";
+    let isLiveMode = false;
+
+    /* Built-in sample objects for simulated mode */
     const SAMPLES = {
       harmless: {
-        name: "harmless_script.sh", size: "384 B",
+        file_name: "harmless_script.sh",
+        size: "384 B",
         sha256: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
-        verdict: "NO ISSUES OBSERVED", vClass: "v-safe",
-        score: 3, staticScore: 0, dynamicScore: 3, findings: [],
-        cpu: [1.2, 1.4, 2.0, 2.5, 2.1, 1.8, 1.5, 2.2, 2.6, 2.0, 1.6, 1.3, 1.8, 2.1, 1.9, 1.4, 1.2, 1.0, 0.9, 0.8],
-        procs: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+        file_type: "POSIX shell script",
+        verdict: "NO ISSUES OBSERVED",
+        score: 3,
+        static_score: 0,
+        dynamic_score: 3,
+        duration_seconds: 1.1,
+        findings: [],
+        timeline: [
+          { t: 0.0, cpu_percent: 1.2, processes: 1 },
+          { t: 0.2, cpu_percent: 1.4, processes: 1 },
+          { t: 0.4, cpu_percent: 2.0, processes: 1 },
+          { t: 0.6, cpu_percent: 2.5, processes: 1 },
+          { t: 0.8, cpu_percent: 2.1, processes: 1 },
+          { t: 1.0, cpu_percent: 1.8, processes: 1 },
+          { t: 1.2, cpu_percent: 1.5, processes: 1 },
+          { t: 1.4, cpu_percent: 2.2, processes: 1 },
+          { t: 1.6, cpu_percent: 2.6, processes: 1 },
+          { t: 1.8, cpu_percent: 2.0, processes: 1 }
+        ],
+        notes: ["Target exited normally with code 0", "No sensitive files or network access attempted"],
+        sandbox_log: "[sentry] Starting sandbox container...\n[sentry] Namespaces and seccomp filter initialized.\n[sentry] Executed target successfully.\n[sentry] Exit code 0."
       },
       dropper: {
-        name: "fake_dropper.bin", size: "14.2 KB",
+        file_name: "fake_dropper.bin",
+        size: "14.2 KB",
         sha256: "7d1a54127b222502f5b79b5fb0803061152a44f92b37e23c65c53d9e1b7c2514",
-        verdict: "MALICIOUS", vClass: "v-mal",
-        score: 78, staticScore: 70, dynamicScore: 8,
+        file_type: "POSIX shell script",
+        verdict: "MALICIOUS",
+        score: 78,
+        static_score: 70,
+        dynamic_score: 8,
+        duration_seconds: 2.1,
         findings: [
           { source: "static", rule: "shell_pipe_download", points: 25, reason: "pipes a download straight into a shell" },
           { source: "static", rule: "ssh_key_touch", points: 25, reason: "touches SSH keys" },
           { source: "static", rule: "persistence_cron", points: 20, reason: "tries to persist across reboots" },
           { source: "dynamic", rule: "network_blocked", points: 8, reason: "network attempt blocked" }
         ],
-        cpu: [2.0, 6.2, 15.0, 31.0, 48.0, 52.0, 38.0, 12.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        procs: [1, 2, 3, 4, 4, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        timeline: [
+          { t: 0.0, cpu_percent: 2.0, processes: 1 },
+          { t: 0.2, cpu_percent: 6.2, processes: 2 },
+          { t: 0.4, cpu_percent: 15.0, processes: 3 },
+          { t: 0.6, cpu_percent: 31.0, processes: 4 },
+          { t: 0.8, cpu_percent: 48.0, processes: 4 },
+          { t: 1.0, cpu_percent: 52.0, processes: 3 },
+          { t: 1.2, cpu_percent: 38.0, processes: 2 },
+          { t: 1.4, cpu_percent: 12.0, processes: 0 }
+        ],
+        notes: ["Blocked outbound socket creation", "Suspicious static strings detected: ~/.ssh/id_rsa, crontab"],
+        sandbox_log: "[sentry] Starting sandbox container...\n[sentry] Syscall connect() blocked by seccomp policy.\n[sentry] Sandbox process terminated."
       },
       noisy: {
-        name: "noisy_worker.py", size: "2.1 KB",
+        file_name: "noisy_worker.py",
+        size: "2.1 KB",
         sha256: "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
-        verdict: "SUSPICIOUS", vClass: "v-sus",
-        score: 46, staticScore: 0, dynamicScore: 46,
+        file_type: "Python script",
+        verdict: "SUSPICIOUS",
+        score: 46,
+        static_score: 0,
+        dynamic_score: 46,
+        duration_seconds: 3.4,
         findings: [
           { source: "dynamic", rule: "process_burst", points: 25, reason: "process count burst (31 processes)" },
           { source: "dynamic", rule: "mass_file_writes", points: 15, reason: "high file write rate (210 files/min)" },
           { source: "dynamic", rule: "cpu_spike", points: 6, reason: "CPU spike" }
         ],
-        cpu: [4.0, 18.0, 45.0, 72.0, 91.0, 96.0, 84.0, 60.0, 49.4, 49.2, 49.0, 48.8, 49.3, 49.1, 48.9, 49.4, 48.7, 49.2, 48.6, 49.0],
-        procs: [1, 3, 10, 20, 28, 31, 31, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30]
+        timeline: [
+          { t: 0.0, cpu_percent: 4.0, processes: 1 },
+          { t: 0.3, cpu_percent: 18.0, processes: 3 },
+          { t: 0.6, cpu_percent: 45.0, processes: 10 },
+          { t: 0.9, cpu_percent: 72.0, processes: 20 },
+          { t: 1.2, cpu_percent: 91.0, processes: 28 },
+          { t: 1.5, cpu_percent: 96.0, processes: 31 },
+          { t: 1.8, cpu_percent: 84.0, processes: 31 },
+          { t: 2.1, cpu_percent: 60.0, processes: 30 },
+          { t: 2.4, cpu_percent: 49.4, processes: 30 },
+          { t: 2.7, cpu_percent: 48.8, processes: 30 }
+        ],
+        notes: ["Process limit hit in cgroup pids.max", "High file write rate detected"],
+        sandbox_log: "[sentry] Starting sandbox container...\n[sentry] Fork limit reached; pids.max throttled fork storm.\n[sentry] Monitor recorded 210 file write events in tmpfs."
       }
     };
 
     let currentFile = null;
     let selectedSample = SAMPLES.harmless;
+    let lastScanResult = null;
 
     /* DOM elements */
     const dropzone = document.getElementById("dropzone");
@@ -293,6 +456,21 @@
     const scanBtn = document.getElementById("scanBtn");
     const stepper = document.getElementById("stepper");
     const resultCard = document.getElementById("resultCard");
+    const scanError = document.getElementById("scanError");
+    const headerBadge = document.getElementById("headerBadge");
+    const cardBadge = document.getElementById("cardBadge");
+
+    function showError(msg) {
+      scanError.textContent = msg;
+      scanError.style.display = "block";
+      scanBtn.disabled = false;
+      stepper.style.display = "none";
+    }
+
+    function clearError() {
+      scanError.textContent = "";
+      scanError.style.display = "none";
+    }
 
     function formatBytes(bytes) {
       if (bytes === 0) return "0 B";
@@ -318,9 +496,10 @@
     }
 
     async function handleFile(file) {
+      clearError();
       currentFile = file;
       fileDetails.style.display = "flex";
-      fileName.textContent = file.name; // User file text via textContent only
+      fileName.textContent = file.name;
       fileSize.textContent = formatBytes(file.size);
       fileHash.textContent = "Computing SHA-256...";
       selectedSample = pickSampleForFile(file.name);
@@ -328,13 +507,16 @@
     }
 
     function setPresetDemo(key) {
+      clearError();
       selectedSample = SAMPLES[key];
       currentFile = null;
       fileDetails.style.display = "flex";
-      fileName.textContent = selectedSample.name; // TextContent rule
+      fileName.textContent = selectedSample.file_name;
       fileSize.textContent = selectedSample.size;
       fileHash.textContent = selectedSample.sha256;
-      startScanAnimation();
+      if (!isLiveMode) {
+        startSimulatedScanAnimation();
+      }
     }
 
     browseBtn.addEventListener("click", () => fileInput.click());
@@ -346,22 +528,74 @@
       if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
     });
 
-    document.getElementById("demoHarmless").addEventListener("click", () => setPresetDemo("harmless"));
-    document.getElementById("demoDropper").addEventListener("click", () => setPresetDemo("dropper"));
-    document.getElementById("demoNoisy").addEventListener("click", () => setPresetDemo("noisy"));
-
-    scanBtn.addEventListener("click", () => {
-      if (!currentFile && !selectedSample) setPresetDemo("harmless");
-      else startScanAnimation();
+    document.getElementById("demoHarmless").addEventListener("click", () => {
+      if (isLiveMode) {
+        triggerLiveDemo("hello", "hello.sh");
+      } else {
+        setPresetDemo("harmless");
+      }
     });
 
-    /* 4-second animation through 4 stages */
+    document.getElementById("demoDropper").addEventListener("click", () => {
+      if (isLiveMode) {
+        triggerLiveDemo("dropper", "fake_dropper.sh");
+      } else {
+        setPresetDemo("dropper");
+      }
+    });
+
+    document.getElementById("demoNoisy").addEventListener("click", () => {
+      if (isLiveMode) {
+        triggerLiveDemo("noisy", "noisy.sh");
+      } else {
+        setPresetDemo("noisy");
+      }
+    });
+
+    // t1-t5 test binary buttons (live mode only; simulated falls back to "harmless")
+    [
+      ["demoT1", "t1_clean",        "t1_clean"],
+      ["demoT2", "t2_file_drop",    "t2_file_drop"],
+      ["demoT3", "t3_secret_reader","t3_secret_reader"],
+      ["demoT4", "t4_network",      "t4_network"],
+      ["demoT5", "t5_spawner",      "t5_spawner"],
+    ].forEach(([id, scenario, name]) => {
+      document.getElementById(id).addEventListener("click", () => {
+        if (isLiveMode) {
+          triggerLiveDemo(scenario, name);
+        } else {
+          setPresetDemo("harmless");
+        }
+      });
+    });
+
+    scanBtn.addEventListener("click", () => {
+      clearError();
+      if (isLiveMode) {
+        if (currentFile) {
+          triggerLiveScan(currentFile);
+        } else {
+          showError("Please select a file to scan or pick a demo scenario above.");
+        }
+      } else {
+        if (!currentFile && !selectedSample) setPresetDemo("harmless");
+        else startSimulatedScanAnimation();
+      }
+    });
+
+    /* Simulated mode animation */
     let scanTimeout = null;
-    function startScanAnimation() {
+    function startSimulatedScanAnimation() {
       if (scanTimeout) clearTimeout(scanTimeout);
+      clearError();
       resultCard.style.display = "none";
       stepper.style.display = "flex";
       scanBtn.disabled = true;
+
+      document.getElementById("stageLabel1").textContent = "Static checks";
+      document.getElementById("stageLabel2").textContent = "Starting sandbox";
+      document.getElementById("stageLabel3").textContent = "Monitoring";
+      document.getElementById("stageLabel4").textContent = "Verdict";
 
       const stages = [document.getElementById("stage1"), document.getElementById("stage2"),
                       document.getElementById("stage3"), document.getElementById("stage4")];
@@ -373,20 +607,139 @@
         if (step < 4) {
           stages[step].classList.add("active");
           step++;
-          scanTimeout = setTimeout(advance, 1000); // 4 stages * 1000ms = 4.0s
+          scanTimeout = setTimeout(advance, 1000);
         } else {
           stages[3].classList.replace("active", "done");
           scanBtn.disabled = false;
-          renderResults();
+          const data = Object.assign({}, selectedSample);
+          if (currentFile) data.file_name = currentFile.name;
+          renderResults(data);
         }
       }
       advance();
     }
 
+    /* Live mode stages helper */
+    let liveStagesTimer = null;
+    function startLiveStages() {
+      clearError();
+      resultCard.style.display = "none";
+      stepper.style.display = "flex";
+      scanBtn.disabled = true;
+
+      document.getElementById("stageLabel1").textContent = "Uploading";
+      document.getElementById("stageLabel2").textContent = "Static checks";
+      document.getElementById("stageLabel3").textContent = "Running in sandbox";
+      document.getElementById("stageLabel4").textContent = "Verdict";
+
+      const stages = [document.getElementById("stage1"), document.getElementById("stage2"),
+                      document.getElementById("stage3"), document.getElementById("stage4")];
+      stages.forEach(s => s.classList.remove("active", "done"));
+
+      stages[0].classList.add("active");
+
+      liveStagesTimer = setTimeout(() => {
+        stages[0].classList.replace("active", "done");
+        stages[1].classList.add("active");
+        liveStagesTimer = setTimeout(() => {
+          stages[1].classList.replace("active", "done");
+          stages[2].classList.add("active");
+        }, 600);
+      }, 400);
+    }
+
+    function completeLiveStages() {
+      if (liveStagesTimer) clearTimeout(liveStagesTimer);
+      const stages = [document.getElementById("stage1"), document.getElementById("stage2"),
+                      document.getElementById("stage3"), document.getElementById("stage4")];
+      stages[0].className = "step-item done";
+      stages[1].className = "step-item done";
+      stages[2].className = "step-item done";
+      stages[3].className = "step-item done";
+      scanBtn.disabled = false;
+    }
+
+    async function handleApiResponse(response) {
+      if (!response.ok) {
+        let errMessage = "HTTP " + response.status;
+        try {
+          const errData = await response.json();
+          if (errData && errData.error) errMessage = errData.error;
+        } catch (e) {}
+
+        if (response.status === 413) {
+          showError("Payload Too Large (413): File exceeds the 20 MB limit.");
+        } else if (response.status === 429) {
+          showError("Server Busy (429): Another scan is already running. Please retry in a few seconds.");
+        } else if (response.status === 500) {
+          showError("Server Error (500): " + errMessage);
+        } else {
+          showError("Scan failed (" + response.status + "): " + errMessage);
+        }
+        return null;
+      }
+
+      try {
+        const data = await response.json();
+        return data;
+      } catch (e) {
+        showError("Invalid response: Unable to parse JSON from server.");
+        return null;
+      }
+    }
+
+    async function triggerLiveDemo(scenario, displayName) {
+      currentFile = null;
+      fileDetails.style.display = "flex";
+      fileName.textContent = displayName;
+      fileSize.textContent = "Demo file";
+      fileHash.textContent = "Repository fixture";
+
+      startLiveStages();
+      try {
+        const resp = await fetch("/api/demo/" + scenario, {
+          method: "POST",
+          headers: {
+            "X-Sentry-Token": SENTRY_TOKEN
+          }
+        });
+        const result = await handleApiResponse(resp);
+        if (result) {
+          completeLiveStages();
+          renderResults(result);
+        }
+      } catch (err) {
+        showError("Network error while connecting to server: " + err.message);
+      }
+    }
+
+    async function triggerLiveScan(file) {
+      startLiveStages();
+      try {
+        const encodedName = encodeURIComponent(file.name);
+        const resp = await fetch("/api/scan?name=" + encodedName, {
+          method: "POST",
+          headers: {
+            "X-Sentry-Token": SENTRY_TOKEN,
+            "Content-Type": "application/octet-stream"
+          },
+          body: file
+        });
+        const result = await handleApiResponse(resp);
+        if (result) {
+          completeLiveStages();
+          renderResults(result);
+        }
+      } catch (err) {
+        showError("Network error during file scan: " + err.message);
+      }
+    }
+
     function renderChartSvg(cpuArr, procArr) {
       const w = 560, h = 140, pad = 30, innerW = w - pad * 2, innerH = h - pad * 2;
-      const ptsCpu = cpuArr.map((v, i) => `${(pad + (i / (cpuArr.length - 1)) * innerW).toFixed(1)},${(pad + innerH - (Math.min(v, 100) / 100) * innerH).toFixed(1)}`).join(" ");
-      const ptsProc = procArr.map((v, i) => `${(pad + (i / (procArr.length - 1)) * innerW).toFixed(1)},${(pad + innerH - (Math.min(v, 40) / 40) * innerH).toFixed(1)}`).join(" ");
+      const count = Math.max(cpuArr.length, 2);
+      const ptsCpu = cpuArr.map((v, i) => `${(pad + (i / (count - 1)) * innerW).toFixed(1)},${(pad + innerH - (Math.min(v, 100) / 100) * innerH).toFixed(1)}`).join(" ");
+      const ptsProc = procArr.map((v, i) => `${(pad + (i / (count - 1)) * innerW).toFixed(1)},${(pad + innerH - (Math.min(v, 40) / 40) * innerH).toFixed(1)}`).join(" ");
 
       return `
         <svg viewBox="0 0 ${w} ${h}" style="width:100%; height:auto; display:block;">
@@ -401,41 +754,315 @@
       `;
     }
 
-    function renderResults() {
-      const data = selectedSample;
+    function getVerdictClass(v) {
+      if (v === "NO ISSUES OBSERVED") return "v-safe";
+      if (v === "SUSPICIOUS") return "v-sus";
+      if (v === "MALICIOUS") return "v-mal";
+      if (v === "NOT FULLY CHECKED") return "v-grey";
+      return "v-grey";
+    }
+
+    function renderResults(data) {
+      lastScanResult = data;
       resultCard.style.display = "flex";
 
-      // File name safely set via textContent
-      document.getElementById("resFileName").textContent = currentFile ? currentFile.name : data.name;
+      // File names and meta safely set via textContent
+      const dispName = data.file_name || "untrusted";
+      document.getElementById("resFileName").textContent = dispName;
+      document.getElementById("metaFileName").textContent = dispName;
+      document.getElementById("metaFileType").textContent = data.file_type || "Unknown";
+      document.getElementById("metaFileHash").textContent = data.sha256 || "N/A";
+      document.getElementById("metaDuration").textContent = (data.duration_seconds !== undefined && data.duration_seconds !== null) ? `${data.duration_seconds} s` : "N/A";
 
+      const sz = data.size_bytes !== undefined && data.size_bytes !== null ? data.size_bytes : (data.size || null);
+      if (sz !== null) {
+        document.getElementById("metaFileSize").textContent = typeof sz === "number" ? `${sz} bytes` : sz;
+      } else {
+        document.getElementById("metaFileSize").textContent = "N/A";
+      }
+
+      // Exit status / termination signal
+      const exitSpan = document.getElementById("resExitStatus");
+      if (data.killed_by_signal) {
+        exitSpan.textContent = `Termination: ${data.killed_by_signal}`;
+        exitSpan.style.color = "#f87171";
+      } else if (data.exit_code !== null && data.exit_code !== undefined) {
+        exitSpan.textContent = `Exit status: code ${data.exit_code}`;
+        exitSpan.style.color = data.exit_code === 0 ? "var(--safe)" : "#fbbf24";
+      } else {
+        exitSpan.textContent = "";
+      }
+
+      // Verdict badge
+      const verdict = data.verdict || "NOT FULLY CHECKED";
       const badge = document.getElementById("verdictBadge");
-      badge.textContent = data.verdict;
-      badge.className = "verdict-badge " + data.vClass;
+      badge.textContent = verdict;
+      badge.className = "verdict-badge " + getVerdictClass(verdict);
 
-      document.getElementById("scoreTotal").textContent = data.score;
-      document.getElementById("scoreStatic").textContent = data.staticScore + " pts";
-      document.getElementById("scoreDynamic").textContent = data.dynamicScore + " pts";
-      document.getElementById("barStatic").style.width = data.staticScore + "%";
-      document.getElementById("barDynamic").style.width = data.dynamicScore + "%";
+      // Score bars
+      const totalScore = (data.score !== undefined ? data.score : 0);
+      const staticScore = (data.static_score !== undefined ? data.static_score : (data.staticScore !== undefined ? data.staticScore : 0));
+      const dynamicScore = (data.dynamic_score !== undefined ? data.dynamic_score : (data.dynamicScore !== undefined ? data.dynamicScore : 0));
 
+      document.getElementById("scoreTotal").textContent = totalScore;
+      document.getElementById("scoreStatic").textContent = staticScore + " pts";
+      document.getElementById("scoreDynamic").textContent = dynamicScore + " pts";
+      document.getElementById("barStatic").style.width = Math.min(100, Math.max(0, staticScore)) + "%";
+      document.getElementById("barDynamic").style.width = Math.min(100, Math.max(0, dynamicScore)) + "%";
+
+      // 2. "What was checked" table
+      const checkedBody = document.getElementById("whatWasCheckedBody");
+      checkedBody.innerHTML = "";
+      const coverage = (data.behavior && data.behavior.coverage) || {};
+
+      const checkItems = [
+        {
+          target: "Static checks",
+          status: "observed",
+          evidence: data.sha256 ? `SHA-256 computed, heuristics pattern evaluated` : "Static signature analysis performed"
+        },
+        {
+          target: "Sandbox run",
+          status: data.dynamic_ran ? "observed" : "NOT MONITORED",
+          evidence: data.dynamic_ran
+            ? (data.killed_by_signal ? `Executed in sandbox; terminated by ${data.killed_by_signal}` : `Executed in isolated sandbox (exit code ${data.exit_code !== null && data.exit_code !== undefined ? data.exit_code : 0})`)
+            : "File was not executed dynamically (static-only or unsupported file type)"
+        },
+        {
+          target: "File writes",
+          status: (data.dynamic_ran && coverage.files_written === "observed") ? "observed" : (data.dynamic_ran ? "observed" : "NOT MONITORED"),
+          evidence: (data.behavior && data.behavior.files_written)
+            ? `${data.behavior.files_written.count} file write/create/modify events recorded`
+            : (data.dynamic_ran ? "File monitoring active; 0 writes recorded" : "File monitoring not active")
+        },
+        {
+          target: "Processes",
+          status: (data.dynamic_ran && (coverage.processes === "sampled" || coverage.processes === "observed" || !coverage.processes)) ? "observed" : "NOT MONITORED",
+          evidence: (data.behavior && data.behavior.processes_spawned)
+            ? `Process hierarchy sampled (peak concurrent children: ${data.behavior.processes_spawned.count})`
+            : (data.dynamic_ran ? "Process tree sampled periodically" : "Process monitoring not active")
+        },
+        {
+          target: "Network traffic",
+          status: "NOT MONITORED",
+          evidence: "Network activity not monitored (coverage: not_monitored)"
+        },
+        {
+          target: "File reads",
+          status: "NOT MONITORED",
+          evidence: "File read operations not observable by monitor (coverage: not_monitored)"
+        }
+      ];
+
+      checkItems.forEach(item => {
+        const tr = document.createElement("tr");
+
+        const tdTarget = document.createElement("td");
+        tdTarget.style.fontWeight = "600";
+        tdTarget.textContent = item.target;
+        tr.appendChild(tdTarget);
+
+        const tdStatus = document.createElement("td");
+        const pill = document.createElement("span");
+        if (item.status === "observed") {
+          pill.className = "observed-pill";
+          pill.textContent = "observed";
+        } else {
+          pill.className = "not-monitored-pill";
+          pill.textContent = "NOT MONITORED";
+        }
+        tdStatus.appendChild(pill);
+        tr.appendChild(tdStatus);
+
+        const tdEv = document.createElement("td");
+        tdEv.style.color = "var(--text-muted)";
+        tdEv.textContent = item.evidence;
+        tr.appendChild(tdEv);
+
+        checkedBody.appendChild(tr);
+      });
+
+      // 3. Findings table with points
       const tbody = document.getElementById("findingsBody");
       tbody.innerHTML = "";
-      if (data.findings.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="4" style="color:var(--safe); text-align:center; padding:12px;">No issues observed in baseline profile (0 findings)</td></tr>`;
+      const findingsList = (data.reasons && data.reasons.length > 0) ? data.reasons : (data.findings || []);
+      if (findingsList.length === 0) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 3;
+        td.style.color = "var(--safe)";
+        td.style.textAlign = "center";
+        td.style.padding = "12px";
+        td.textContent = "No issues observed (0 findings)";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
       } else {
-        data.findings.forEach(f => {
+        findingsList.forEach(f => {
           const row = document.createElement("tr");
-          row.innerHTML = `
-            <td><span class="tag-src ${f.source === 'static' ? 'tag-static' : 'tag-dynamic'}">${f.source}</span></td>
-            <td><code>${f.rule}</code></td>
-            <td style="font-weight:bold; color:#f87171;">+${f.points}</td>
-            <td>${f.reason}</td>
-          `;
+
+          const tdCat = document.createElement("td");
+          const spanCat = document.createElement("span");
+          const cat = (f.category || f.source || "process").toLowerCase();
+          spanCat.className = "tag-src " + (cat === "static" ? "tag-static" : (cat === "seccomp" ? "tag-seccomp" : (cat === "file" ? "tag-file" : "tag-process")));
+          spanCat.textContent = cat;
+          tdCat.appendChild(spanCat);
+          row.appendChild(tdCat);
+
+          const tdPts = document.createElement("td");
+          tdPts.style.fontWeight = "bold";
+          const pts = f.points !== undefined ? f.points : 0;
+          tdPts.style.color = pts > 0 ? "#f87171" : "var(--text-muted)";
+          tdPts.textContent = pts > 0 ? ("+" + pts) : "0";
+          row.appendChild(tdPts);
+
+          const tdReason = document.createElement("td");
+          tdReason.textContent = f.reason || "";
+          row.appendChild(tdReason);
+
           tbody.appendChild(row);
         });
       }
-      document.getElementById("svgChartWrapper").innerHTML = renderChartSvg(data.cpu, data.procs);
+
+      // Notes list - DOM textContent only
+      const notesUl = document.getElementById("notesList");
+      notesUl.innerHTML = "";
+      const notes = data.notes || [];
+      if (notes.length > 0) {
+        document.getElementById("notesSection").style.display = "block";
+        notes.forEach(n => {
+          const li = document.createElement("li");
+          li.textContent = n;
+          notesUl.appendChild(li);
+        });
+      } else {
+        document.getElementById("notesSection").style.display = "none";
+      }
+
+      // Chart - skip if empty
+      const chartBox = document.getElementById("chartBox");
+      let cpu = [];
+      let procs = [];
+      if (data.timeline && data.timeline.length > 0) {
+        cpu = data.timeline.map(pt => (pt.cpu_percent !== undefined ? pt.cpu_percent : 0));
+        procs = data.timeline.map(pt => (pt.processes !== undefined ? pt.processes : 0));
+      } else if (data.cpu && data.procs && data.cpu.length > 0) {
+        cpu = data.cpu;
+        procs = data.procs;
+      }
+
+      if (cpu.length > 0) {
+        chartBox.style.display = "block";
+        document.getElementById("svgChartWrapper").innerHTML = renderChartSvg(cpu, procs);
+      } else {
+        chartBox.style.display = "none";
+      }
+
+      // 4. AI explanation card
+      const aiCard = document.getElementById("aiExplanationCard");
+      const aiSummary = document.getElementById("aiSummary");
+      const aiWhatItDid = document.getElementById("aiWhatItDid");
+      const aiWhyFlagged = document.getElementById("aiWhyFlagged");
+      const aiRiskBadge = document.getElementById("aiRiskBadge");
+      const aiRecommendedAction = document.getElementById("aiRecommendedAction");
+      const aiLimitations = document.getElementById("aiLimitations");
+      const aiErr  = document.getElementById("aiExplanationError");
+      const aiExp  = data.ai_explanation;
+
+      if (aiExp && (aiExp.summary || aiExp.text || aiExp.error)) {
+        aiCard.style.display = "block";
+        if (!aiExp.ok && aiExp.error) {
+          aiErr.textContent = "Notice: " + aiExp.error;
+          aiErr.style.display = "block";
+        } else {
+          aiErr.style.display = "none";
+        }
+
+        aiSummary.textContent = aiExp.summary || aiExp.text || "(No summary provided)";
+        aiWhatItDid.textContent = aiExp.what_it_did || "Executed under Linux sandbox monitoring.";
+
+        const risk = aiExp.risk_level || data.verdict || "UNKNOWN";
+        aiRiskBadge.textContent = risk;
+        aiRiskBadge.className = "verdict-badge " + getVerdictClass(risk.toUpperCase());
+
+        aiWhyFlagged.innerHTML = "";
+        const whyItems = (aiExp.why_flagged && aiExp.why_flagged.length > 0)
+          ? aiExp.why_flagged
+          : (data.findings && data.findings.length > 0
+              ? data.findings.map(f => f.reason).filter(Boolean)
+              : ["No suspicious findings detected."]);
+        whyItems.forEach(item => {
+          const li = document.createElement("li");
+          li.textContent = item;
+          aiWhyFlagged.appendChild(li);
+        });
+
+        aiRecommendedAction.textContent = aiExp.recommended_action || "Review findings before executing outside sandbox.";
+
+        aiLimitations.innerHTML = "";
+        const limItems = (aiExp.limitations && aiExp.limitations.length > 0)
+          ? aiExp.limitations
+          : ["Network activity was not monitored (not checked).",
+             "File reads were not monitored (not checked).",
+             "Short execution observation time limit."];
+        limItems.forEach(item => {
+          const li = document.createElement("li");
+          li.textContent = item;
+          aiLimitations.appendChild(li);
+        });
+      } else {
+        aiCard.style.display = "none";
+      }
+
+      // 5. Collapsible sandbox_log
+      const logPre = document.getElementById("sandboxLog");
+      logPre.textContent = data.sandbox_log || "(No sandbox log recorded)";
+      document.getElementById("sandboxLogDetails").removeAttribute("open");
     }
+
+    // Download JSON report
+    document.getElementById("downloadReportBtn").addEventListener("click", () => {
+      if (!lastScanResult) return;
+      const jsonStr = JSON.stringify(lastScanResult, null, 2);
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const safeName = (lastScanResult.file_name || "report").replace(/[^a-zA-Z0-9._-]/g, "_");
+      a.download = `sentry-report-${safeName}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+
+    // Check live mode on startup
+    async function initLiveMode() {
+      if (SENTRY_TOKEN && SENTRY_TOKEN !== "__SENTRY_TOKEN__") {
+        try {
+          const resp = await fetch("/api/health", {
+            headers: { "X-Sentry-Token": SENTRY_TOKEN }
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data && data.ok) {
+              isLiveMode = true;
+              headerBadge.textContent = "● Live sandbox ready";
+              headerBadge.className = "badge badge-live";
+              cardBadge.textContent = "Real sandbox scan";
+              cardBadge.className = "badge badge-live";
+            }
+          }
+        } catch (e) {
+          isLiveMode = false;
+        }
+      }
+      if (!isLiveMode) {
+        headerBadge.textContent = "Scanner offline — start it with: make demo";
+        headerBadge.className = "badge badge-off";
+      }
+    }
+
+    initLiveMode();
   </script>
 </body>
 </html>
