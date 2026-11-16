@@ -3,6 +3,7 @@
 
 import argparse
 import collections
+import hashlib
 import json
 import os
 import re
@@ -124,6 +125,40 @@ CANNED_RESULTS = {
 def sanitize_display_name(raw_name):
     clean = re.sub(r"[^a-zA-Z0-9._-]", "_", raw_name)[:80]
     return clean if clean else "untrusted"
+
+
+def detect_file_type_from_bytes(raw_bytes, filename):
+    """Return a human-readable file type string from magic bytes and extension."""
+    head = raw_bytes[:256] if len(raw_bytes) >= 256 else raw_bytes
+    if head[:4] == b"\x7fELF":
+        return "ELF executable"
+    if head[:2] == b"MZ":
+        return "Windows PE executable"
+    if head[:2] == b"#!":
+        shebang_line = head.split(b"\n", 1)[0][2:].decode(errors="ignore").strip()
+        parts = shebang_line.split()
+        if parts:
+            interp = os.path.basename(parts[0])
+            if interp == "env" and len(parts) > 1:
+                interp = os.path.basename(parts[1])
+            return f"POSIX shell script ({interp})" if interp in ("sh", "bash", "dash") else f"Script ({interp})"
+    # Fall back to extension
+    lower = (filename or "").lower()
+    if lower.endswith((".c", ".cc", ".cpp", ".cxx")):
+        return "C source"
+    if lower.endswith(".h"):
+        return "C header"
+    if lower.endswith(".py"):
+        return "Python script"
+    if lower.endswith((".sh", ".bash")):
+        return "POSIX shell script"
+    if lower.endswith(".rs"):
+        return "Rust source"
+    if lower.endswith(".go"):
+        return "Go source"
+    if lower.endswith(".java"):
+        return "Java source"
+    return "Binary/unknown"
 
 
 def get_stub_result(scenario, display_name):
@@ -345,7 +380,7 @@ class SentryHandler(BaseHTTPRequestHandler):
         max_bytes = 20 * 1024 * 1024
         content_length_header = self.headers.get("Content-Length")
         if not content_length_header:
-            self.send_error_json(411, "Length Required")
+            self.send_error_json(400, "no file provided")
             return
 
         try:
@@ -354,11 +389,18 @@ class SentryHandler(BaseHTTPRequestHandler):
             self.send_error_json(400, "Invalid Content-Length")
             return
 
+        if content_length == 0:
+            self.send_error_json(400, "no file provided")
+            return
+
         if content_length > max_bytes:
             self.send_error_json(413, "Payload Too Large: maximum 20 MB")
             return
 
         raw_bytes = self.rfile.read(content_length)
+        if len(raw_bytes) == 0:
+            self.send_error_json(400, "no file provided")
+            return
         if len(raw_bytes) > max_bytes:
             self.send_error_json(413, "Payload Too Large: maximum 20 MB")
             return
@@ -390,6 +432,25 @@ class SentryHandler(BaseHTTPRequestHandler):
             with open(temp_file_path, "wb") as f:
                 f.write(raw_bytes)
 
+            compile_requested = query_params.get("compile", ["0"])[0] in ("1", "true")
+            scan_target = temp_file_path
+            is_compiled = False
+
+            if compile_requested and ext in (".c", ".cpp", ".cc"):
+                compiled_bin = os.path.join(temp_dir, "myprog")
+                compiler = "g++" if ext in (".cpp", ".cc") else "gcc"
+                compile_cmd = [compiler, "-static", "-O2", "-o", compiled_bin, temp_file_path]
+                res = subprocess.run(compile_cmd, capture_output=True, text=True, timeout=30)
+                if res.returncode != 0:
+                    compile_cmd = [compiler, "-O2", "-o", compiled_bin, temp_file_path]
+                    res = subprocess.run(compile_cmd, capture_output=True, text=True, timeout=30)
+                if res.returncode != 0:
+                    err_txt = res.stderr.strip() or res.stdout.strip() or "gcc compilation failed"
+                    self.send_error_json(400, f"Compilation failed: {err_txt[:300]}")
+                    return
+                scan_target = compiled_bin
+                is_compiled = True
+
             if os.environ.get("SENTRY_SCAN_STUB") == "1":
                 delay_str = os.environ.get("SENTRY_SCAN_DELAY", "1")
                 try:
@@ -404,14 +465,35 @@ class SentryHandler(BaseHTTPRequestHandler):
                     scenario = "dropper"
                 elif "noisy" in lower_name:
                     scenario = "noisy"
+                elif "t1_clean" in lower_name:
+                    scenario = "t1_clean"
+                elif "t2_file_drop" in lower_name:
+                    scenario = "t2_file_drop"
+                elif "t3_secret_reader" in lower_name:
+                    scenario = "t3_secret_reader"
+                elif "t4_network" in lower_name:
+                    scenario = "t4_network"
+                elif "t5_spawner" in lower_name:
+                    scenario = "t5_spawner"
                 else:
                     scenario = "hello"
                 result = get_stub_result(scenario, sanitized_name)
+                # Overwrite stub metadata with real values from the uploaded bytes
+                if is_compiled and os.path.exists(scan_target):
+                    with open(scan_target, "rb") as bf:
+                        bin_bytes = bf.read()
+                    result["sha256"] = hashlib.sha256(bin_bytes).hexdigest()
+                    result["size_bytes"] = len(bin_bytes)
+                    result["file_type"] = detect_file_type_from_bytes(bin_bytes, "myprog")
+                else:
+                    result["sha256"] = hashlib.sha256(raw_bytes).hexdigest()
+                    result["size_bytes"] = len(raw_bytes)
+                    result["file_type"] = detect_file_type_from_bytes(raw_bytes, sanitized_name)
             else:
                 cmd = [
                     sys.executable,
                     "cli/scan.py",
-                    temp_file_path,
+                    scan_target,
                     "--json",
                     "--timeout",
                     str(timeout_val),
@@ -433,7 +515,11 @@ class SentryHandler(BaseHTTPRequestHandler):
                     self.send_error_json(500, f"Scanner output error: {e}")
                     return
 
-            result["file_name"] = sanitized_name
+            if is_compiled:
+                result["compiled"] = True
+                result["file_name"] = f"{sanitized_name} (compiled)"
+            else:
+                result["file_name"] = sanitized_name
             result["ai_explanation"] = explain_result(result)
             with self.server.history_lock:
                 self.server.history.appendleft(result)

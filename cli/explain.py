@@ -45,7 +45,7 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 # ── API configuration ────────────────────────────────────────────────────────
-_DEFAULT_MODEL = "gemini-flash-latest"
+_DEFAULT_MODEL = "gemini-1.5-flash"
 _API_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     "{model}:generateContent"
@@ -280,6 +280,15 @@ def explain_result(result: Dict[str, Any]) -> Dict[str, Any]:
             "recommended_action": recommended_action,
             "limitations": limitations,
         }
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+            err_json = json.loads(err_body)
+            msg = err_json.get("error", {}).get("message", err_body)
+            short_err = f"HTTP {e.code}: {msg}"
+        except Exception:
+            short_err = f"HTTPError: {e}"
+        return _make_fallback(short_err)
     except Exception as e:
         short_err = f"{type(e).__name__}: {e}"
         return _make_fallback(short_err)
