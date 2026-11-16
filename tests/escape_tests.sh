@@ -97,6 +97,15 @@ run_escape_test() {
         2>"${stderr_log}" || exit_code=$?
 
     grep '^\[escape\]' "${stderr_log}" || true
+
+    if grep -q '^\[sandbox\] FATAL' "${stderr_log}"; then
+        grep '^\[sandbox\] FATAL' "${stderr_log}"
+        rm -f "${stderr_log}"
+        echo -e "${RED}  FAIL${NC} — sandbox failed to start (setup error), test did not run"
+        FAIL=$((FAIL + 1))
+        rm -f "${SANDBOX_ROOT}/bin/escape_test"
+        return
+    fi
     rm -f "${stderr_log}"
 
     local files_ok=0
@@ -193,6 +202,11 @@ run_escape_test \
     "fd_leak" \
     "${ESCAPE_BIN}/fd_leak" \
     "Scans /proc/self/fd for leaked fds >= 3"
+
+run_escape_test \
+    "clone_newuser" \
+    "${ESCAPE_BIN}/clone_newuser" \
+    "Tries clone(CLONE_NEWUSER) — blocked by seccomp"
 
 # -----------------------------------------------------------------------
 # Summary

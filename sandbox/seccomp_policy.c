@@ -33,6 +33,7 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 
+#include <sched.h>
 #include <seccomp.h>
 
 #include "seccomp_policy.h"
@@ -114,35 +115,32 @@ static int allow_unix_socket_only(scmp_filter_ctx ctx)
 }
 
 /* ------------------------------------------------------------------ */
-/*  clone/clone3 restriction: block CLONE_NEWUSER flag               */
+/*  clone/clone3 restriction: namespace-creating clones hit the      */
+/*  default action (SIGSYS)                                          */
 /* ------------------------------------------------------------------ */
 
-#define CLONE_NEWUSER_FLAG  0x10000000UL
+#define NS_CLONE_MASK (CLONE_NEWUSER|CLONE_NEWNS|CLONE_NEWNET|CLONE_NEWPID| \
+                       CLONE_NEWUTS|CLONE_NEWIPC|CLONE_NEWCGROUP)
 
 static int restrict_clone(scmp_filter_ctx ctx)
 {
-    /* Block clone() if CLONE_NEWUSER bit is set in flags (arg 0) */
-    int _r = seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(clone), 1,
-                              SCMP_A0(SCMP_CMP_MASKED_EQ,
-                                      (scmp_datum_t)CLONE_NEWUSER_FLAG,
-                                      (scmp_datum_t)CLONE_NEWUSER_FLAG));
-    if (_r != 0) {
-        fprintf(stderr, "[seccomp] Failed to restrict clone CLONE_NEWUSER: %s\n", strerror(-_r));
+    int r = seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(clone), 1,
+                             SCMP_A0(SCMP_CMP_MASKED_EQ, (scmp_datum_t)NS_CLONE_MASK, (scmp_datum_t)0));
+    if (r != 0) {
+        fprintf(stderr, "[seccomp] Failed to restrict clone: %s\n", strerror(-r));
         seccomp_release(ctx);
         return -1;
     }
 
     /* Block clone3() similarly — its flags are in a struct pointer (arg 0),
      * so we can't inspect them easily. Block clone3 entirely for safety. */
-    _r = seccomp_rule_add(ctx, SCMP_ACT_ERRNO(ENOSYS), SCMP_SYS(clone3), 0);
-    if (_r != 0) {
-        fprintf(stderr, "[seccomp] Failed to block clone3: %s\n", strerror(-_r));
+    r = seccomp_rule_add(ctx, SCMP_ACT_ERRNO(ENOSYS), SCMP_SYS(clone3), 0);
+    if (r != 0) {
+        fprintf(stderr, "[seccomp] Failed to block clone3: %s\n", strerror(-r));
         seccomp_release(ctx);
         return -1;
     }
 
-    /* Allow clone() without CLONE_NEWUSER (default allow will cover it after deny) */
-    ALLOW(ctx, clone);
     return 0;
 }
 

@@ -46,6 +46,7 @@
 #include <net/if.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <dirent.h>
 #include <linux/capability.h>
 
 #ifndef PR_CAPBSET_DROP
@@ -240,12 +241,12 @@ static int setup_filesystem(const char *sandbox_root)
         fprintf(stderr, "[sandbox] mkdir %s: %s\n", path, strerror(errno));
     }
     if (mount("proc", path, "proc", 0, NULL) != 0) {
-        perror("[sandbox] mount: proc (non-fatal)");
-    } else {
-        /* Make /proc read-only */
-        if (mount("proc", path, "proc", MS_REMOUNT | MS_RDONLY, NULL) != 0) {
-            perror("[sandbox] mount: proc MS_RDONLY (non-fatal)");
-        }
+        fprintf(stderr, "[sandbox] FATAL: mount /proc failed: %s\n", strerror(errno));
+        return -1;
+    }
+    if (mount("proc", path, "proc", MS_REMOUNT | MS_RDONLY, NULL) != 0) {
+        fprintf(stderr, "[sandbox] FATAL: remount /proc ro failed: %s\n", strerror(errno));
+        return -1;
     }
 
     /* Step F: Real device nodes (null, zero, urandom) already exist in <root>/dev.
@@ -257,7 +258,8 @@ static int setup_filesystem(const char *sandbox_root)
         fprintf(stderr, "[sandbox] mkdir %s: %s\n", path, strerror(errno));
     }
     if (mount("tmpfs", path, "tmpfs", 0, "size=32m,mode=1777") != 0) {
-        perror("[sandbox] mount: tmpfs /tmp (non-fatal)");
+        fprintf(stderr, "[sandbox] FATAL: mount tmpfs /tmp failed: %s\n", strerror(errno));
+        return -1;
     }
 
     /* Step H: Create old_root directory and call pivot_root */
@@ -276,20 +278,18 @@ static int setup_filesystem(const char *sandbox_root)
     }
 
     /* Check that /dev/null, /dev/zero and /dev/urandom can be opened for reading */
-    int dev_failures = 0;
     const char *check_devs[] = { "/dev/null", "/dev/zero", "/dev/urandom", NULL };
     for (int i = 0; check_devs[i]; i++) {
         int fd = open(check_devs[i], O_RDONLY);
-        if (fd >= 0) {
-            close(fd);
-        } else {
-            dev_failures++;
+        if (fd < 0) {
+            fprintf(stderr, "[sandbox] FATAL: open %s failed: %s\n", check_devs[i], strerror(errno));
+            return -1;
         }
+        close(fd);
     }
 
     /* Step I: Mask dangerous /proc paths by bind-mounting /dev/null over them.
      *         This must happen AFTER pivot_root so paths are relative to new root. */
-    int proc_mask_failures = 0;
     const char *dangerous_proc_paths[] = {
         "/proc/sysrq-trigger",
         "/proc/sys/kernel/core_pattern",
@@ -299,38 +299,36 @@ static int setup_filesystem(const char *sandbox_root)
     for (int i = 0; dangerous_proc_paths[i]; i++) {
         if (access(dangerous_proc_paths[i], F_OK) == 0) {
             if (mount("/dev/null", dangerous_proc_paths[i], NULL, MS_BIND, NULL) != 0) {
-                fprintf(stderr, "[sandbox] mask %s (non-fatal): %s\n",
+                fprintf(stderr, "[sandbox] FATAL: mask %s failed: %s\n",
                         dangerous_proc_paths[i], strerror(errno));
-                proc_mask_failures++;
+                return -1;
             }
-        } else {
-            proc_mask_failures++;
         }
     }
 
-    /* Step J: Unmount and remove the old root */
+    /* Step J: Unmount old root */
     if (umount2("/" OLD_ROOT_NAME, MNT_DETACH) != 0) {
-        perror("[sandbox] umount2 old_root (non-fatal)");
-    }
-    if (rmdir("/" OLD_ROOT_NAME) != 0) {
-        perror("[sandbox] rmdir old_root (non-fatal)");
+        fprintf(stderr, "[sandbox] FATAL: umount2 old_root failed: %s\n", strerror(errno));
+        return -1;
     }
 
     printf("  ✓ pivot_root complete (read-only base + tmpfs scratch)\n");
-
-    if (dev_failures == 0) {
-        printf("  ✓ Minimal /dev\n");
-    } else {
-        fprintf(stderr, "  ✗ Minimal /dev: %d failed\n", dev_failures);
-    }
-
-    if (proc_mask_failures == 0) {
-        printf("  ✓ /proc masked\n");
-    } else {
-        fprintf(stderr, "  ✗ /proc masked: %d failed\n", proc_mask_failures);
-    }
-
+    printf("  ✓ Minimal /dev\n");
+    printf("  ✓ /proc masked\n");
     printf("  ✓ Fresh tmpfs on /tmp\n");
+
+    DIR *d = opendir("/" OLD_ROOT_NAME);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {
+            if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) {
+                closedir(d);
+                fprintf(stderr, "[sandbox] FATAL: old root not empty (host fs reachable)\n");
+                return -1;
+            }
+        }
+        closedir(d);
+    }
     return 0;
 }
 
@@ -362,6 +360,36 @@ static int bring_up_loopback(void)
 /*  Child entry point                                                 */
 /* ------------------------------------------------------------------ */
 
+static int verify_isolation(void)
+{
+    char buf[256], line[256];
+    FILE *f;
+
+    f = fopen("/proc/self/uid_map", "r");
+    if (!f) { fprintf(stderr, "[sandbox] verify: cannot open uid_map: %s\n", strerror(errno)); return -1; }
+    line[0] = '\0';
+    if (fgets(line, sizeof line, f) == NULL) line[0] = '\0';
+    fclose(f);
+    fprintf(stderr, "[sandbox] verify: uid_map='%s' getuid=%d\n", line, (int)getuid());
+    if (!strstr(line, "65534")) { fprintf(stderr, "[sandbox] verify: FAIL uid_map lacks 65534\n"); return -1; }
+    if (getuid() != 0)          { fprintf(stderr, "[sandbox] verify: FAIL getuid != 0\n"); return -1; }
+
+    f = fopen("/proc/self/status", "r");
+    if (!f) { fprintf(stderr, "[sandbox] verify: cannot open status: %s\n", strerror(errno)); return -1; }
+    int found = 0, ok = 0;
+    while (fgets(buf, sizeof buf, f)) {
+        if (!strncmp(buf, "CapEff:", 7)) {
+            fprintf(stderr, "[sandbox] verify: %s", buf);
+            found = 1;
+            ok = (strstr(buf, "0000000000000000") != NULL);
+            break;
+        }
+    }
+    fclose(f);
+    if (!found || !ok) { fprintf(stderr, "[sandbox] verify: FAIL CapEff not zero\n"); return -1; }
+    return 0;
+}
+
 static int child_fn(void *arg)
 {
     /* Ensure the child is killed when the parent exits (even on SIGKILL). */
@@ -384,12 +412,12 @@ static int child_fn(void *arg)
      * Parent writes 1 byte AFTER it has added the child PID to the cgroup.
      * This ensures cgroup_add_pid happens before execve. */
     close(cfg->ready_pipe_wr);
-    {
-        char dummy;
-        if (read(cfg->ready_pipe_rd, &dummy, 1) < 0 && errno != EINTR) {
-            fprintf(stderr, "[sandbox] Pipe handshake read failed: %s\n", strerror(errno));
-        }
-        close(cfg->ready_pipe_rd);
+    char go = 0;
+    ssize_t n = read(cfg->ready_pipe_rd, &go, 1);
+    close(cfg->ready_pipe_rd);
+    if (n != 1 || go != '!') {
+        fprintf(stderr, "[sandbox] FATAL: parent aborted setup\n");
+        return EXIT_FAILURE;
     }
     printf("  ✓ Cgroup handshake complete\n");
     fflush(stdout);
@@ -409,9 +437,21 @@ static int child_fn(void *arg)
         perror("[sandbox] setsid (non-fatal)");
     }
 
+    /* Our real kuid is still host root (unmapped, shows as 65534). Switch to
+     * ns uid/gid 0 (= host 65534) while we still hold CAP_SETUID/SETGID. */
+    if (setresgid(0, 0, 0) != 0 || setresuid(0, 0, 0) != 0) {
+        fprintf(stderr, "[sandbox] FATAL: switch to sandbox uid/gid failed: %s\n", strerror(errno));
+        return EXIT_FAILURE;
+    }
+
     /* Part 1.1 — Drop all capabilities */
     if (drop_all_capabilities() != 0) {
         fprintf(stderr, "[sandbox] Failed to drop all capabilities\n");
+        return EXIT_FAILURE;
+    }
+
+    if (verify_isolation() != 0) {
+        fprintf(stderr, "[sandbox] FATAL: isolation verification failed\n");
         return EXIT_FAILURE;
     }
 
@@ -458,6 +498,16 @@ static int child_fn(void *arg)
 /* ------------------------------------------------------------------ */
 /*  create_sandbox_v3 — Part 1 + 2 + 3 + 4                          */
 /* ------------------------------------------------------------------ */
+
+static pid_t abort_child(pid_t pid, int wr, char *stack, struct sandbox_config *cfg)
+{
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    close(wr);
+    free(cfg);
+    free(stack);
+    return -1;
+}
 
 pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
                         const sandbox_profile_t *profile,
@@ -519,7 +569,8 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
 
     /* Part 1.1 — Write UID/GID maps NOW (from parent, after clone) */
     if (write_uid_gid_maps(pid, cfg->host_uid, cfg->host_gid) != 0) {
-        fprintf(stderr, "[sandbox] WARNING: UID/GID map write failed\n");
+        fprintf(stderr, "[sandbox] FATAL: UID/GID map write failed\n");
+        return abort_child(pid, pipefd[1], stack, cfg);
     }
 
     /* Part 1.4 — Build unique cgroup path using child PID */
@@ -527,20 +578,18 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
 
     /* Part 1.4 — Create cgroup and apply profile */
     if (cgroup_create(cgroup_path_out) != 0) {
-        close(pipefd[1]);
-        free(cfg); free(stack);
-        return -1;
+        return abort_child(pid, pipefd[1], stack, cfg);
     }
     if (profile && cgroup_apply_profile(cgroup_path_out, profile) != 0) {
         cgroup_destroy(cgroup_path_out);
-        close(pipefd[1]);
-        free(cfg); free(stack);
-        return -1;
+        return abort_child(pid, pipefd[1], stack, cfg);
     }
 
     /* Part 1.4 — Add PID to cgroup BEFORE signalling child to exec */
     if (cgroup_add_pid(cgroup_path_out, pid) != 0) {
-        fprintf(stderr, "[sandbox] WARNING: cgroup_add_pid failed\n");
+        fprintf(stderr, "[sandbox] FATAL: cgroup_add_pid failed\n");
+        cgroup_destroy(cgroup_path_out);
+        return abort_child(pid, pipefd[1], stack, cfg);
     }
 
     /* Part 1.5 — Write PID to control channel so CLI doesn't parse stdout */

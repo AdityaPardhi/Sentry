@@ -231,7 +231,7 @@ def run_in_sandbox(path, kind, interp, args, quiet_json, notes):
         elif proc is not None:
             exit_code = proc.returncode
 
-    ran = "SENTRY SANDBOX" in out
+    ran = "SENTRY SANDBOX" in out and "[sandbox] FATAL" not in out
     if not ran:
         notes.append("The sandbox did not start. Check that `make` and `sudo make setup` were run.")
     score, findings, timeline, actions = collect_dynamic(db_path, started)
