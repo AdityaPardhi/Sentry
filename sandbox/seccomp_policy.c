@@ -53,6 +53,17 @@
         } \
     } while (0)
 
+#define NOTIFY(ctx, syscall_name) \
+    do { \
+        int _r = seccomp_rule_add((ctx), SCMP_ACT_NOTIFY, SCMP_SYS(syscall_name), 0); \
+        if (_r != 0) { \
+            fprintf(stderr, "[seccomp] Failed to notify %s: %s\n", \
+                    #syscall_name, strerror(-_r)); \
+            seccomp_release(ctx); \
+            return -1; \
+        } \
+    } while (0)
+
 /* Allow syscall only when argument at index arg_idx equals arg_val */
 #define ALLOW_ARG(ctx, syscall_name, arg_idx, cmp, arg_val) \
     do { \
@@ -97,10 +108,11 @@
 
 static int allow_unix_socket_only(scmp_filter_ctx ctx)
 {
-    /* Block dangerous address families with EAFNOSUPPORT */
+    /* Route dangerous address families to supervisor via SCMP_ACT_NOTIFY;
+     * the supervisor denies them with EAFNOSUPPORT and logs them. */
     int blocked_afs[] = { AF_INET_VAL, AF_INET6_VAL, AF_NETLINK_VAL, AF_PACKET_VAL, -1 };
     for (int i = 0; blocked_afs[i] != -1; i++) {
-        int _r = seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EAFNOSUPPORT), SCMP_SYS(socket), 1,
+        int _r = seccomp_rule_add(ctx, SCMP_ACT_NOTIFY, SCMP_SYS(socket), 1,
                                   SCMP_A0(SCMP_CMP_EQ, (scmp_datum_t)blocked_afs[i]));
         if (_r != 0) {
             fprintf(stderr, "[seccomp] Failed to block socket(AF=%d): %s\n",
@@ -201,8 +213,9 @@ static int install_standard(scmp_filter_ctx ctx)
     ALLOW(ctx, tee);
 
     /* File operations */
-    ALLOW(ctx, open);
-    ALLOW(ctx, openat);
+    NOTIFY(ctx, open);
+    NOTIFY(ctx, openat);
+    NOTIFY(ctx, openat2);
     ALLOW(ctx, close);
     ALLOW(ctx, stat);
     ALLOW(ctx, fstat);
@@ -475,8 +488,12 @@ static int install_permissive(scmp_filter_ctx ctx)
 /*  Public API                                                        */
 /* ------------------------------------------------------------------ */
 
-int seccomp_install_policy(seccomp_mode_t mode)
+int seccomp_install_policy(seccomp_mode_t mode, int *notify_fd)
 {
+    if (notify_fd) {
+        *notify_fd = -1;
+    }
+
     /*
      * PR_SET_NO_NEW_PRIVS — prevents the sandboxed process from gaining
      * new privileges via setuid/setcap executables even if it tries to
@@ -534,6 +551,16 @@ int seccomp_install_policy(seccomp_mode_t mode)
         fprintf(stderr, "[seccomp] seccomp_load() failed: %s\n", strerror(-rc));
         seccomp_release(ctx);
         return -1;
+    }
+
+    if (mode != SECCOMP_MODE_MINIMAL && notify_fd != NULL) {
+        int nfd = seccomp_notify_fd(ctx);
+        if (nfd < 0) {
+            fprintf(stderr, "[seccomp] seccomp_notify_fd failed: %s\n", strerror(-nfd));
+            seccomp_release(ctx);
+            return -1;
+        }
+        *notify_fd = nfd;
     }
 
     seccomp_release(ctx);

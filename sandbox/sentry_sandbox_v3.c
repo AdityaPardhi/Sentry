@@ -48,6 +48,8 @@
 #include <errno.h>
 #include <dirent.h>
 #include <linux/capability.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
 
 #ifndef PR_CAPBSET_DROP
 #define PR_CAPBSET_DROP 24
@@ -61,6 +63,7 @@
 
 #include "cgroup.h"
 #include "seccomp_policy.h"
+#include "notify.h"
 
 #define STACK_SIZE       (1024 * 1024)
 #define DEFAULT_ROOT     "/opt/sentry/sandbox-root"
@@ -77,6 +80,7 @@ struct sandbox_config {
     seccomp_mode_t  seccomp_mode;
     int             ready_pipe_rd;  /* child reads one byte then continues */
     int             ready_pipe_wr;  /* child closes its write end          */
+    int             notify_sock;
     uid_t           host_uid;       /* real UID on host (for user ns maps) */
     gid_t           host_gid;       /* real GID on host                    */
 };
@@ -390,6 +394,27 @@ static int verify_isolation(void)
     return 0;
 }
 
+static int send_fd(int sock, int fd) {
+    char c = 'x'; struct iovec io = { &c, 1 };
+    char cb[CMSG_SPACE(sizeof(int))]; memset(cb, 0, sizeof cb);
+    struct msghdr m; memset(&m, 0, sizeof m);
+    m.msg_iov = &io; m.msg_iovlen = 1; m.msg_control = cb; m.msg_controllen = sizeof cb;
+    struct cmsghdr *h = CMSG_FIRSTHDR(&m);
+    h->cmsg_level = SOL_SOCKET; h->cmsg_type = SCM_RIGHTS; h->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(h), &fd, sizeof(int));
+    return sendmsg(sock, &m, 0) == 1 ? 0 : -1;
+}
+static int recv_fd(int sock) {
+    char c; struct iovec io = { &c, 1 };
+    char cb[CMSG_SPACE(sizeof(int))];
+    struct msghdr m; memset(&m, 0, sizeof m);
+    m.msg_iov = &io; m.msg_iovlen = 1; m.msg_control = cb; m.msg_controllen = sizeof cb;
+    if (recvmsg(sock, &m, 0) != 1) return -1;
+    struct cmsghdr *h = CMSG_FIRSTHDR(&m);
+    if (!h || h->cmsg_type != SCM_RIGHTS) return -1;
+    int fd; memcpy(&fd, CMSG_DATA(h), sizeof(int)); return fd;
+}
+
 static int child_fn(void *arg)
 {
     /* Ensure the child is killed when the parent exits (even on SIGKILL). */
@@ -465,13 +490,26 @@ static int child_fn(void *arg)
 
     /*
      * Close all file descriptors >= 3 before installing seccomp so that no
-     * inherited fds (including cfg->control_fd) survive into the exec'd child.
+     * inherited fds (including cfg->control_fd) survive into the exec'd child,
+     * but preserve cfg->notify_sock so we can hand over the listener fd.
      * Try the Linux 5.9+ close_range(2) fast path first; fall back to a loop.
      */
-    if (syscall(SYS_close_range, 3, ~0U, 0) != 0) {
+    int s = cfg->notify_sock;
+    int cr_fail = 0;
+    if (s > 3) {
+        if (syscall(SYS_close_range, 3, s - 1, 0) != 0) {
+            cr_fail = 1;
+        }
+    }
+    if (syscall(SYS_close_range, s + 1, ~0U, 0) != 0) {
+        cr_fail = 1;
+    }
+    if (cr_fail) {
         int max_fd = getdtablesize();
         for (int fd = 3; fd < max_fd; fd++) {
-            close(fd);
+            if (fd != s) {
+                close(fd);
+            }
         }
     }
 
@@ -480,10 +518,21 @@ static int child_fn(void *arg)
      * - After pivot_root: filter only needs to cover target binary's syscalls.
      * - Before exec: filter is inherited by the exec'd program.
      */
-    if (seccomp_install_policy(cfg->seccomp_mode) != 0) {
+    int nfd = -1;
+    if (seccomp_install_policy(cfg->seccomp_mode, &nfd) != 0) {
         fprintf(stderr, "[sentry] Failed to install seccomp filter\n");
+        close(cfg->notify_sock);
         return EXIT_FAILURE;
     }
+
+    if (nfd >= 0) {
+        if (send_fd(cfg->notify_sock, nfd) != 0) {
+            fprintf(stderr, "[sandbox] FATAL: could not hand over seccomp listener\n");
+            return EXIT_FAILURE;
+        }
+        close(nfd);
+    }
+    close(cfg->notify_sock);
 
     printf("  ✓ Seccomp filter active\n");
     printf("──────────────────────────────────────────────\n\n");
@@ -513,7 +562,8 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
                         const sandbox_profile_t *profile,
                         seccomp_mode_t seccomp_mode,
                         char *cgroup_path_out,    /* SENTRY_CGROUP_PATH_MAX */
-                        int control_fd)           /* -1 if not used */
+                        int control_fd,           /* -1 if not used */
+                        const char *events_path)
 {
     if (access(sandbox_root, F_OK) != 0) {
         fprintf(stderr, "Error: sandbox root '%s' not found.\n", sandbox_root);
@@ -528,8 +578,21 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
     }
     /* pipefd[0] = read end (child), pipefd[1] = write end (parent signals child) */
 
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        perror("socketpair");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+
     char *stack = malloc(STACK_SIZE);
-    if (!stack) { perror("malloc"); close(pipefd[0]); close(pipefd[1]); return -1; }
+    if (!stack) {
+        perror("malloc");
+        close(pipefd[0]); close(pipefd[1]);
+        close(sv[0]); close(sv[1]);
+        return -1;
+    }
     char *stack_top = stack + STACK_SIZE;
 
     struct sandbox_config *cfg = malloc(sizeof(*cfg));
@@ -537,6 +600,7 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
         perror("malloc cfg");
         free(stack);
         close(pipefd[0]); close(pipefd[1]);
+        close(sv[0]); close(sv[1]);
         return -1;
     }
     cfg->cmd            = cmd;
@@ -544,6 +608,7 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
     cfg->seccomp_mode   = seccomp_mode;
     cfg->ready_pipe_rd  = pipefd[0];
     cfg->ready_pipe_wr  = pipefd[1];
+    cfg->notify_sock    = sv[1];
     cfg->host_uid       = 65534;
     cfg->host_gid       = 65534;
 
@@ -561,15 +626,18 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
         perror("clone");
         free(cfg); free(stack);
         close(pipefd[0]); close(pipefd[1]);
+        close(sv[0]); close(sv[1]);
         return -1;
     }
 
     /* Parent: close child's read end */
     close(pipefd[0]);
+    close(sv[1]);
 
     /* Part 1.1 — Write UID/GID maps NOW (from parent, after clone) */
     if (write_uid_gid_maps(pid, cfg->host_uid, cfg->host_gid) != 0) {
         fprintf(stderr, "[sandbox] FATAL: UID/GID map write failed\n");
+        close(sv[0]);
         return abort_child(pid, pipefd[1], stack, cfg);
     }
 
@@ -578,9 +646,11 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
 
     /* Part 1.4 — Create cgroup and apply profile */
     if (cgroup_create(cgroup_path_out) != 0) {
+        close(sv[0]);
         return abort_child(pid, pipefd[1], stack, cfg);
     }
     if (profile && cgroup_apply_profile(cgroup_path_out, profile) != 0) {
+        close(sv[0]);
         cgroup_destroy(cgroup_path_out);
         return abort_child(pid, pipefd[1], stack, cfg);
     }
@@ -588,6 +658,7 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
     /* Part 1.4 — Add PID to cgroup BEFORE signalling child to exec */
     if (cgroup_add_pid(cgroup_path_out, pid) != 0) {
         fprintf(stderr, "[sandbox] FATAL: cgroup_add_pid failed\n");
+        close(sv[0]);
         cgroup_destroy(cgroup_path_out);
         return abort_child(pid, pipefd[1], stack, cfg);
     }
@@ -609,6 +680,17 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
     }
     close(pipefd[1]);
 
+    int nfd = recv_fd(sv[0]);
+    close(sv[0]);
+    if (nfd >= 0 && notify_start(nfd, events_path) != 0) {
+        cgroup_destroy(cgroup_path_out);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        free(cfg);
+        free(stack);
+        return -1;
+    }
+
     /* Note: stack and cfg are leaked — they are needed until child exits.
      * For a long-running program this is acceptable (it's only two mallocs). */
 
@@ -623,7 +705,7 @@ static void print_usage(const char *prog)
 {
     fprintf(stderr,
         "SENTRY Sandbox v%s\n"
-        "Usage: %s run <command> [--profile <name>] [--seccomp <mode>] [--control-fd <n>]\n"
+        "Usage: %s run <command> [--profile <name>] [--seccomp <mode>] [--control-fd <n>] [--events-file <path>]\n"
         "\n"
         "Resource profiles:\n"
         "  strict      CPU 10%%, RAM 256MB, PIDs 10\n"
@@ -634,6 +716,9 @@ static void print_usage(const char *prog)
         "  minimal     Bare-minimum syscalls (blocks almost everything)\n"
         "  standard    Common utilities: ls, cat, echo, bash  (default)\n"
         "  permissive  Extended: Python scripts, dynamic languages\n"
+        "\n"
+        "Supervisor events:\n"
+        "  --events-file PATH Log observed events (JSON-lines) to PATH.\n"
         "\n"
         "Control channel:\n"
         "  --control-fd N   Write 'PID:<child_pid>\\n' to fd N before exec.\n"
@@ -686,6 +771,7 @@ int main(int argc, char *argv[])
     const char *profile_name  = extract_option(cmd_start, &cmd_argc, "--profile");
     const char *seccomp_name  = extract_option(cmd_start, &cmd_argc, "--seccomp");
     const char *control_fd_s  = extract_option(cmd_start, &cmd_argc, "--control-fd");
+    const char *events_path   = extract_option(cmd_start, &cmd_argc, "--events-file");
 
     if (!profile_name || !*profile_name)
         profile_name = getenv("SENTRY_PROFILE");
@@ -729,7 +815,8 @@ int main(int argc, char *argv[])
     memset(cgroup_path, 0, sizeof(cgroup_path));
 
     pid_t child = create_sandbox_v3(cmd_start, sandbox_root, profile,
-                                    seccomp_mode, cgroup_path, control_fd);
+                                    seccomp_mode, cgroup_path, control_fd,
+                                    events_path);
     if (child == -1) {
         fprintf(stderr, "[sentry] Failed to create sandbox.\n");
         return EXIT_FAILURE;
@@ -743,9 +830,11 @@ int main(int argc, char *argv[])
     int status;
     if (waitpid(child, &status, 0) == -1) {
         perror("waitpid");
+        notify_stop();
         cgroup_destroy(cgroup_path);
         return EXIT_FAILURE;
     }
+    notify_stop();
 
     printf("[sentry] ──────────────────────────────────────\n");
     int exit_code = EXIT_SUCCESS;

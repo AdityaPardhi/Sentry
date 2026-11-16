@@ -49,10 +49,11 @@ typedef enum {
  * Default action: SCMP_ACT_KILL_PROCESS — any syscall not on the
  * allow-list immediately terminates the process with SIGSYS.
  *
- * @param mode  How restrictive the policy should be.
- * @return      0 on success, -1 on error.
+ * @param mode       How restrictive the policy should be.
+ * @param notify_fd  If non-NULL, receives the seccomp notification fd.
+ * @return           0 on success, -1 on error.
  */
-int seccomp_install_policy(seccomp_mode_t mode);
+int seccomp_install_policy(seccomp_mode_t mode, int *notify_fd);
 
 /**
  * seccomp_mode_from_name — Parse a mode string.

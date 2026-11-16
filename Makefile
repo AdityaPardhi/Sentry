@@ -47,8 +47,8 @@ $(BINDIR):
 # Phase 1+2+3 combined CLI (with seccomp filter + capability drop)
 # Requires: libseccomp-dev, libcap-dev
 #   sudo apt install libseccomp-dev libcap-dev
-$(BINDIR)/sentry_sandbox_v3: $(SANDBOX)/sentry_sandbox_v3.c $(SANDBOX)/cgroup.c $(SANDBOX)/seccomp_policy.c | $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lseccomp $(LDFLAGS)
+$(BINDIR)/sentry_sandbox_v3: $(SANDBOX)/sentry_sandbox_v3.c $(SANDBOX)/cgroup.c $(SANDBOX)/seccomp_policy.c $(SANDBOX)/notify.c | $(BINDIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lseccomp -lpthread $(LDFLAGS)
 
 # ── Test helpers ──────────────────────────────────────────────────────
 
