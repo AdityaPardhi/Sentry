@@ -175,6 +175,52 @@ def collect_dynamic(db_path, started):
     return score, findings, timeline, actions
 
 
+AF_NAMES = {2: "AF_INET", 10: "AF_INET6", 16: "AF_NETLINK", 17: "AF_PACKET"}
+SOCK_NAMES = {1: "stream/TCP", 2: "datagram/UDP", 3: "raw"}
+
+
+def read_events(path):
+    """Read the supervisor's JSON-lines log. Returns (events, file_existed)."""
+    events = []
+    if not os.path.exists(path):
+        return events, False
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(ev, dict):
+                events.append(ev)
+    return events, True
+
+
+def events_to_findings(events):
+    """Return (points, findings, network_examples, sensitive_path_examples)."""
+    net = [e for e in events if e.get("type") == "network"]
+    opens = [e for e in events if e.get("type") == "sensitive_open"]
+    findings, net_ex, path_ex, points = [], [], [], 0
+    if net:
+        for e in net:
+            fam = AF_NAMES.get(e.get("family"), "family %s" % e.get("family"))
+            typ = SOCK_NAMES.get(e.get("sock_type"), "socket")
+            ex = "%s %s socket" % (fam, typ)
+            if ex not in net_ex:
+                net_ex.append(ex)
+        findings.append({"source": "dynamic", "category": "seccomp", "rule": "NETWORK_ATTEMPT",
+                         "points": 30,
+                         "reason": "Tried to open a network connection (%d attempt(s), blocked): %s"
+                                   % (len(net), ", ".join(net_ex[:3]))})
+        points += 30
+    if opens:
+        path_ex = sorted({str(e.get("path", "")) for e in opens})[:5]
+        findings.append({"source": "dynamic", "category": "file", "rule": "SENSITIVE_FILE_READ",
+                         "points": 25,
+                         "reason": "Tried to open credential files: " + ", ".join(path_ex)})
+        points += 25
+    return points, findings, net_ex, path_ex
+
+
 def run_in_sandbox(path, kind, interp, args, quiet_json, notes):
     """Copy the sample into the sandbox root, run it, return (ran, score, findings, timeline, log, behavior, exit_code, killed_by_signal)."""
     if kind == "script":
@@ -194,9 +240,11 @@ def run_in_sandbox(path, kind, interp, args, quiet_json, notes):
     inside = "/" + SAMPLE_DIR + "/" + name
     tmp = tempfile.mkdtemp(prefix="sentry_scan_")
     db_path = os.path.join(tmp, "scan.db")
+    events_path = os.path.join(tmp, "events.jsonl")
     cmd = [inside] if kind == "elf" else [ipath, inside]
     run = [sys.executable, "-u", os.path.join(ROOT, "cli", "sentry.py"), "run", *cmd,
            "--profile", args.profile, "--seccomp", args.seccomp, "--db", db_path,
+           "--events-file", events_path,
            "--interval", "0.5", "--timeout", str(args.timeout)]
     out = ""
     proc = None
@@ -235,6 +283,10 @@ def run_in_sandbox(path, kind, interp, args, quiet_json, notes):
     if not ran:
         notes.append("The sandbox did not start. Check that `make` and `sudo make setup` were run.")
     score, findings, timeline, actions = collect_dynamic(db_path, started)
+    events, events_ok = read_events(events_path)
+    ev_points, ev_findings, net_ex, path_ex = events_to_findings(events)
+    findings.extend(ev_findings)
+    score = min(score + ev_points, 100)
     if killed_by_signal == "SIGSYS":
         notes.append("The program was killed for trying a restricted system call. That is "
                      "suspicious, but it can also mean a harmless program needs a call Sentry "
@@ -249,6 +301,12 @@ def run_in_sandbox(path, kind, interp, args, quiet_json, notes):
                          "reason": f"Sentry responded automatically: {a}"})
 
     behavior = build_report(db_path)
+    if behavior is not None and events_ok:
+        cov = behavior.setdefault("coverage", {})
+        cov["network"] = "observed"
+        cov["file_reads"] = "credential_paths_only"
+        behavior["network_attempts"] = {"count": sum(1 for e in events if e.get("type") == "network"), "examples": net_ex}
+        behavior["files_read_sensitive"] = {"count": sum(1 for e in events if e.get("type") == "sensitive_open"), "examples": path_ex}
     if args.keep_db:
         notes.append(f"Telemetry kept at {db_path}")
     else:
