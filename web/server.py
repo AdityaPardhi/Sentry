@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from cli.explain import explain_result
 
 if hasattr(os, "geteuid"):
@@ -268,7 +269,7 @@ class SentryHandler(BaseHTTPRequestHandler):
             return
 
         if path in ("/", "/index.html"):
-            demo_file = os.path.join("web", "demo.html")
+            demo_file = os.path.join(REPO_ROOT, "web", "demo.html")
             try:
                 with open(demo_file, "r", encoding="utf-8") as f:
                     content = f.read()
@@ -331,6 +332,7 @@ class SentryHandler(BaseHTTPRequestHandler):
         try:
             timeout_val = self.parse_timeout(query_params)
             demo_path, default_name = DEMO_FILES[scenario]
+            demo_path = os.path.join(REPO_ROOT, demo_path)
             sanitized_name = sanitize_display_name(query_params.get("name", [default_name])[0])
 
             if os.environ.get("SENTRY_SCAN_STUB") == "1":
@@ -345,7 +347,7 @@ class SentryHandler(BaseHTTPRequestHandler):
             else:
                 cmd = [
                     sys.executable,
-                    "cli/scan.py",
+                    os.path.join(REPO_ROOT, "cli", "scan.py"),
                     demo_path,
                     "--json",
                     "--timeout",
@@ -357,6 +359,7 @@ class SentryHandler(BaseHTTPRequestHandler):
                         capture_output=True,
                         text=True,
                         timeout=timeout_val + 40,
+                        cwd=REPO_ROOT,
                     )
                     result = json.loads(proc.stdout)
                     if not isinstance(result, dict):
@@ -492,7 +495,7 @@ class SentryHandler(BaseHTTPRequestHandler):
             else:
                 cmd = [
                     sys.executable,
-                    "cli/scan.py",
+                    os.path.join(REPO_ROOT, "cli", "scan.py"),
                     scan_target,
                     "--json",
                     "--timeout",
@@ -504,6 +507,7 @@ class SentryHandler(BaseHTTPRequestHandler):
                         capture_output=True,
                         text=True,
                         timeout=timeout_val + 40,
+                        cwd=REPO_ROOT,
                     )
                     result = json.loads(proc.stdout)
                     if not isinstance(result, dict):

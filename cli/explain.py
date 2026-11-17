@@ -58,8 +58,9 @@ def _fallback(report: Dict[str, Any]) -> str:
     score = report.get("score", 0)
     verdict = report.get("verdict", "SAFE")
     parts = [f"Verdict: {verdict} (score {score}/100)."]
+    b = report.get("behavior") or report
 
-    fw = report.get("files_written", {})
+    fw = b.get("files_written", {})
     if fw.get("count", 0):
         ex = ", ".join(fw["examples"][:3]) if fw.get("examples") else ""
         parts.append(
@@ -67,7 +68,7 @@ def _fallback(report: Dict[str, Any]) -> str:
             + (f" Examples: {ex}." if ex else "")
         )
 
-    frs = report.get("files_read_sensitive", {})
+    frs = b.get("files_read_sensitive", {})
     if frs.get("count", 0):
         ex = ", ".join(frs["examples"][:3]) if frs.get("examples") else ""
         parts.append(
@@ -75,15 +76,15 @@ def _fallback(report: Dict[str, Any]) -> str:
             + (f" Examples: {ex}." if ex else "")
         )
 
-    na = report.get("network_attempts", {})
+    na = b.get("network_attempts", {})
     if na.get("count", 0):
         ex = ", ".join(na["examples"][:3]) if na.get("examples") else ""
         parts.append(
             f"It made {na['count']} network connection attempt(s)."
-            + (f" Destinations: {ex}." if ex else "")
+            + (f" Seen: {ex}." if ex else "")
         )
 
-    ps = report.get("processes_spawned", {})
+    ps = b.get("processes_spawned", {})
     if ps.get("count", 0):
         parts.append(f"It spawned up to {ps['count']} child process(es).")
 
@@ -95,7 +96,16 @@ def _fallback(report: Dict[str, Any]) -> str:
             parts.append(f"Finding: {reason} (+{f.get('points', 0)} pts).")
 
     if score == 0:
-        parts.append("No suspicious behaviour was detected.")
+        parts.append("No suspicious behaviour was observed during this run.")
+    cov = b.get("coverage") or {}
+    limits = {
+        ("file_reads", "credential_paths_only"): "only opens of credential files were checked, not other file reads",
+        ("file_reads", "not_monitored"): "file reads were not monitored",
+        ("network", "not_monitored"): "network activity was not monitored",
+    }
+    for key, val in cov.items():
+        if (key, val) in limits:
+            parts.append("Note: " + limits[(key, val)] + ".")
 
     parts.append(
         "(AI explanation unavailable — set GEMINI_API_KEY to enable it.)"
