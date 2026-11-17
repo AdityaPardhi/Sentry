@@ -531,15 +531,25 @@ static int child_fn(void *arg)
             return EXIT_FAILURE;
         }
         close(nfd);
+    } else {
+        if (send(cfg->notify_sock, "n", 1, MSG_NOSIGNAL) != 1) {
+            fprintf(stderr, "[sandbox] FATAL: could not notify parent\n");
+            return EXIT_FAILURE;
+        }
     }
-    close(cfg->notify_sock);
+    fcntl(cfg->notify_sock, F_SETFD, FD_CLOEXEC);
 
     printf("  ✓ Seccomp filter active\n");
     printf("──────────────────────────────────────────────\n\n");
     fflush(stdout);
 
     /* exec — seccomp filter is inherited across execve */
+    if (send(cfg->notify_sock, "X", 1, MSG_NOSIGNAL) != 1) {
+        fprintf(stderr, "[sandbox] FATAL: could not send start signal\n");
+        return EXIT_FAILURE;
+    }
     execvp(cfg->cmd[0], cfg->cmd);
+    (void)send(cfg->notify_sock, "F", 1, MSG_NOSIGNAL);
     perror("execvp");
     return EXIT_FAILURE;
 }
@@ -563,8 +573,11 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
                         seccomp_mode_t seccomp_mode,
                         char *cgroup_path_out,    /* SENTRY_CGROUP_PATH_MAX */
                         int control_fd,           /* -1 if not used */
-                        const char *events_path)
+                        const char *events_path,
+                        int *status_sock_out)
 {
+    if (status_sock_out) *status_sock_out = -1;
+
     if (access(sandbox_root, F_OK) != 0) {
         fprintf(stderr, "Error: sandbox root '%s' not found.\n", sandbox_root);
         return -1;
@@ -681,8 +694,10 @@ pid_t create_sandbox_v3(char *cmd[], char *sandbox_root,
     close(pipefd[1]);
 
     int nfd = recv_fd(sv[0]);
-    close(sv[0]);
+    if (status_sock_out) *status_sock_out = sv[0];
     if (nfd >= 0 && notify_start(nfd, events_path) != 0) {
+        close(sv[0]);
+        if (status_sock_out) *status_sock_out = -1;
         cgroup_destroy(cgroup_path_out);
         kill(pid, SIGKILL);
         waitpid(pid, NULL, 0);
@@ -705,7 +720,7 @@ static void print_usage(const char *prog)
 {
     fprintf(stderr,
         "SENTRY Sandbox v%s\n"
-        "Usage: %s run <command> [--profile <name>] [--seccomp <mode>] [--control-fd <n>] [--events-file <path>]\n"
+        "Usage: %s run <command> [--profile <name>] [--seccomp <mode>] [--control-fd <n>] [--events-file <path>] [--status-file <path>]\n"
         "\n"
         "Resource profiles:\n"
         "  strict      CPU 10%%, RAM 256MB, PIDs 10\n"
@@ -719,6 +734,7 @@ static void print_usage(const char *prog)
         "\n"
         "Supervisor events:\n"
         "  --events-file PATH Log observed events (JSON-lines) to PATH.\n"
+        "  --status-file PATH Write JSON status on exit to PATH.\n"
         "\n"
         "Control channel:\n"
         "  --control-fd N   Write 'PID:<child_pid>\\n' to fd N before exec.\n"
@@ -752,6 +768,18 @@ static char *extract_option(char **argv, int *argc_ptr, const char *flag)
     return NULL;
 }
 
+static void write_status(const char *path, int started, int status) {
+    FILE *f = fopen(path, "w"); if (!f) return;
+    const char *st = started ? "true" : "false";
+    if (WIFEXITED(status))
+        fprintf(f, "{\"started\":%s,\"exited\":true,\"exit_code\":%d,\"signal\":null}\n", st, WEXITSTATUS(status));
+    else if (WIFSIGNALED(status))
+        fprintf(f, "{\"started\":%s,\"exited\":false,\"exit_code\":null,\"signal\":%d}\n", st, WTERMSIG(status));
+    else
+        fprintf(f, "{\"started\":%s,\"exited\":false,\"exit_code\":null,\"signal\":null}\n", st);
+    fclose(f);
+}
+
 int main(int argc, char *argv[])
 {
     setbuf(stdout, NULL);
@@ -772,6 +800,7 @@ int main(int argc, char *argv[])
     const char *seccomp_name  = extract_option(cmd_start, &cmd_argc, "--seccomp");
     const char *control_fd_s  = extract_option(cmd_start, &cmd_argc, "--control-fd");
     const char *events_path   = extract_option(cmd_start, &cmd_argc, "--events-file");
+    const char *status_file   = extract_option(cmd_start, &cmd_argc, "--status-file");
 
     if (!profile_name || !*profile_name)
         profile_name = getenv("SENTRY_PROFILE");
@@ -814,9 +843,10 @@ int main(int argc, char *argv[])
     char cgroup_path[SENTRY_CGROUP_PATH_MAX];
     memset(cgroup_path, 0, sizeof(cgroup_path));
 
+    int status_sock = -1;
     pid_t child = create_sandbox_v3(cmd_start, sandbox_root, profile,
                                     seccomp_mode, cgroup_path, control_fd,
-                                    events_path);
+                                    events_path, &status_sock);
     if (child == -1) {
         fprintf(stderr, "[sentry] Failed to create sandbox.\n");
         return EXIT_FAILURE;
@@ -831,10 +861,20 @@ int main(int argc, char *argv[])
     if (waitpid(child, &status, 0) == -1) {
         perror("waitpid");
         notify_stop();
+        if (status_sock >= 0) close(status_sock);
         cgroup_destroy(cgroup_path);
         return EXIT_FAILURE;
     }
     notify_stop();
+
+    int started = 0;
+    if (status_sock >= 0) {
+        char b[8]; memset(b, 0, sizeof b); size_t n = 0; ssize_t r;
+        while (n < sizeof b && (r = recv(status_sock, b + n, sizeof b - n, MSG_DONTWAIT)) > 0) n += (size_t)r;
+        started = (memchr(b, 'X', n) != NULL) && (memchr(b, 'F', n) == NULL);
+        close(status_sock);
+    }
+    if (status_file) write_status(status_file, started, status);
 
     printf("[sentry] ──────────────────────────────────────\n");
     int exit_code = EXIT_SUCCESS;

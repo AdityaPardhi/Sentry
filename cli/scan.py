@@ -24,6 +24,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -221,6 +222,15 @@ def events_to_findings(events):
     return points, findings, net_ex, path_ex
 
 
+def read_status(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 def run_in_sandbox(path, kind, interp, args, quiet_json, notes):
     """Copy the sample into the sandbox root, run it, return (ran, score, findings, timeline, log, behavior, exit_code, killed_by_signal)."""
     if kind == "script":
@@ -241,10 +251,11 @@ def run_in_sandbox(path, kind, interp, args, quiet_json, notes):
     tmp = tempfile.mkdtemp(prefix="sentry_scan_")
     db_path = os.path.join(tmp, "scan.db")
     events_path = os.path.join(tmp, "events.jsonl")
+    status_path = os.path.join(tmp, "status.json")
     cmd = [inside] if kind == "elf" else [ipath, inside]
     run = [sys.executable, "-u", os.path.join(ROOT, "cli", "sentry.py"), "run", *cmd,
            "--profile", args.profile, "--seccomp", args.seccomp, "--db", db_path,
-           "--events-file", events_path,
+           "--events-file", events_path, "--status-file", status_path,
            "--interval", "0.5", "--timeout", str(args.timeout)]
     out = ""
     proc = None
@@ -266,20 +277,23 @@ def run_in_sandbox(path, kind, interp, args, quiet_json, notes):
         except OSError:
             pass
 
+    status = read_status(status_path)
     killed_by_signal = None
     exit_code = None
-    if "SIGSYS" in out:
-        killed_by_signal = "SIGSYS"
-    elif "timed out" in out:
-        killed_by_signal = "timed out"
-    else:
-        m = re.search(r"exit (?:code|status)[:\s]+(\d+)", out, re.IGNORECASE)
-        if m:
-            exit_code = int(m.group(1))
-        elif proc is not None:
-            exit_code = proc.returncode
-
-    ran = "SENTRY SANDBOX" in out and "[sandbox] FATAL" not in out
+    ran = bool(status and status.get("started"))
+    if status and ran:
+        sig = status.get("signal")
+        if sig == 31:
+            killed_by_signal = "SIGSYS"
+        elif sig == 9 and (time.time() - started) >= args.timeout - 1.0:
+            killed_by_signal = "timed out"
+        elif sig:
+            try:
+                killed_by_signal = signal.Signals(sig).name
+            except ValueError:
+                killed_by_signal = "signal %s" % sig
+        else:
+            exit_code = status.get("exit_code")
     if not ran:
         notes.append("The sandbox did not start. Check that `make` and `sudo make setup` were run.")
     score, findings, timeline, actions = collect_dynamic(db_path, started)
@@ -294,6 +308,7 @@ def run_in_sandbox(path, kind, interp, args, quiet_json, notes):
         if not any(f.get("category") == "seccomp" or "seccomp" in f.get("rule", "").lower() for f in findings):
             findings.append({"source": "dynamic", "category": "seccomp", "rule": "SECCOMP_SIGSYS",
                              "points": 25, "reason": "Restricted system call blocked by seccomp policy (SIGSYS)"})
+            score = min(score + 25, 100)
     if killed_by_signal == "timed out":
         notes.append("The program was still running at the time limit and was stopped.")
     for a in actions:

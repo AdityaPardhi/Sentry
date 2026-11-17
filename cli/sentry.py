@@ -304,6 +304,8 @@ def cmd_run(args: argparse.Namespace, remaining_cmd: List[str]) -> None:
         cmd_line.extend(["--seccomp", args.seccomp])
     if getattr(args, "events_file", None):
         cmd_line.extend(["--events-file", args.events_file])
+    if getattr(args, "status_file", None):
+        cmd_line.extend(["--status-file", args.status_file])
 
     # SENTRY sandbox requires root (namespaces + cgroups)
     if os.geteuid() != 0:
@@ -713,6 +715,7 @@ def main():
     p_run.add_argument("--timeout", type=float, default=30.0,
                        help="Maximum execution duration in seconds before terminating sandbox (default: 30.0s)")
     p_run.add_argument("--events-file", default=None, help="JSON-lines log of sandbox events (network / credential opens)")
+    p_run.add_argument("--status-file", default=None, help="JSON status file written by the sandbox upon exit")
 
     # Command: monitor
     p_mon = subparsers.add_parser("monitor", help="Monitor an existing process PID")
